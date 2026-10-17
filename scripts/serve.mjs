@@ -1,4 +1,5 @@
 import { PIECE_IMAGE_URLS } from '../web/piece-images.mjs';
+import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
@@ -33,6 +34,55 @@ export function validateEnvelope(value, fixture, selected) {
     Array.isArray(s.moved) && s.moved.length === 512 && s.moved.every(v => v === 0 || v === 1) &&
     Array.isArray(s.destinations) && s.destinations.every((id, i, ids) => isCell(id) && id !== selected && (i === 0 || id > ids[i - 1])) &&
     (selected !== -1 && s.cells[selected] !== 0 || s.destinations.length === 0);
+}
+
+const MATCH_ERRORS = {
+  INVALID_REQUEST: 400, INVALID_SELECTION: 400, INVALID_STATE: 502,
+  STALE_REVISION: 409, NOT_YOUR_TURN: 422, ILLEGAL_MOVE: 422,
+  PROMOTION_REQUIRED: 422, INVALID_PROMOTION: 422, GAME_OVER: 409, REVISION_EXHAUSTED: 409,
+};
+function exact(value, keys) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+}
+function revision(value) { return Number.isInteger(value) && value >= 0 && value <= 1000000; }
+function promotion(value) { return [0, 2, 3, 4, 5].includes(value); }
+export function validateMatchEnvelope(value, selected, expectedRevision) {
+  if (exact(value, ['ok', 'error']) && value.ok === false) {
+    return exact(value.error, ['code', 'message']) && Object.hasOwn(MATCH_ERRORS, value.error.code) &&
+      typeof value.error.message === 'string' && value.error.message.length > 0 && value.error.message.length <= 256;
+  }
+  if (!exact(value, ['ok', 'capsule', 'snapshot']) || value.ok !== true ||
+      typeof value.capsule !== 'string' || !value.capsule.startsWith('ZC1|') || value.capsule.length > 16384 ||
+      !/^[\x20-\x7e]+$/.test(value.capsule) || value.capsule.includes('~')) return false;
+  const s = value.snapshot;
+  if (!exact(s, ['schemaVersion', 'mode', 'revision', 'sideToMove', 'inCheck', 'result', 'selected', 'cells', 'moved', 'destinations', 'moves', 'lastMove']) ||
+      s.schemaVersion !== 2 || s.mode !== 'match' || s.selected !== selected || !revision(s.revision) ||
+      (expectedRevision !== undefined && s.revision !== expectedRevision) || ![1, -1].includes(s.sideToMove) ||
+      typeof s.inCheck !== 'boolean' || !['active', 'white-wins', 'black-wins', 'stalemate'].includes(s.result) ||
+      !Array.isArray(s.cells) || s.cells.length !== 512 || !s.cells.every(v => Number.isInteger(v) && Math.abs(v) <= 6) ||
+      !Array.isArray(s.moved) || s.moved.length !== 512 || !s.moved.every(v => v === 0 || v === 1) ||
+      !Array.isArray(s.destinations) || !s.destinations.every((id, i, ids) => isCell(id) && id !== selected && (i === 0 || id > ids[i - 1])) ||
+      !Array.isArray(s.moves) || s.moves.length !== s.destinations.length) return false;
+  if ((selected === -1 || s.cells[selected] * s.sideToMove <= 0 || s.result !== 'active') && s.moves.length) return false;
+  if (!s.moves.every((m, i) => exact(m, ['to', 'kind', 'promotions']) && m.to === s.destinations[i] &&
+      ['move', 'capture', 'en-passant', 'castle'].includes(m.kind) && Array.isArray(m.promotions) &&
+      (m.promotions.length === 0 || JSON.stringify(m.promotions) === '[2,3,4,5]'))) return false;
+  return s.lastMove === null || exact(s.lastMove, ['from', 'to', 'promotion']) &&
+    isCell(s.lastMove.from) && isCell(s.lastMove.to) && s.lastMove.from !== s.lastMove.to && promotion(s.lastMove.promotion);
+}
+
+async function matchBody(req) {
+  if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) throw [400, 'INVALID_REQUEST', 'Expected application/json'];
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 1024) throw [413, 'INVALID_REQUEST', 'Request body is too large'];
+    chunks.push(chunk);
+  }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw [400, 'INVALID_REQUEST', 'Invalid JSON']; }
 }
 
 function localAuthority(req) {
@@ -99,11 +149,103 @@ async function staticFile(rawPath, res) {
   }
 }
 
-export function createServer({ execFileImpl = execFile, timeoutMs = TIMEOUT_MS } = {}) {
+export function createServer({ execFileImpl = execFile, timeoutMs = TIMEOUT_MS, queueTimeoutMs = TIMEOUT_MS } = {}) {
   const active = new Set();
+  const session = randomUUID();
+  let capsule, currentRevision, initialization, closed = false, running = false;
+  const queue = [];
+  function invoke(operand) {
+    if (closed || active.size >= 2) return Promise.reject([503, 'BUSY', 'Faber is busy']);
+    return new Promise((resolveChild, reject) => {
+      const entry = { child: null };
+      active.add(entry);
+      try {
+        entry.child = execFileImpl(FABER_BINARY, ['run', '--locale', 'en', ROOT, '--', 'match', operand], {
+          cwd: ROOT, encoding: 'utf8', timeout: timeoutMs, maxBuffer: MAX_OUTPUT, killSignal: 'SIGKILL', shell: false,
+        }, (error, stdout) => {
+          active.delete(entry);
+          if (error) {
+            const timeout = error.killed && error.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+            reject([timeout ? 504 : 502, timeout ? 'FABER_TIMEOUT' : 'FABER_FAILURE', timeout ? 'Faber query timed out' : 'Faber query failed']);
+            return;
+          }
+          try { resolveChild(JSON.parse(stdout)); }
+          catch { reject([502, 'INVALID_FABER_JSON', 'Faber returned invalid JSON']); }
+        });
+      } catch { active.delete(entry); reject([502, 'FABER_FAILURE', 'Faber could not start']); }
+    });
+  }
+  async function initializeMatch() {
+    if (!initialization) initialization = (async () => {
+      const result = await invoke('init');
+      if (!validateMatchEnvelope(result, -1, 0) || !result.ok) throw [502, 'INVALID_FABER_JSON', 'Faber could not initialize match'];
+      capsule = result.capsule; currentRevision = result.snapshot.revision;
+    })();
+    return initialization;
+  }
+  async function dispatch() {
+    if (running || !queue.length || closed) return;
+    running = true;
+    const item = queue.shift();
+    clearTimeout(item.timer);
+    try {
+      await initializeMatch();
+      const { action, body, selected } = item;
+      if (action !== 'read') {
+        if (body.session !== session) throw [409, 'STALE_SESSION', 'Match session has changed'];
+        if (body.revision !== currentRevision) throw [409, 'STALE_REVISION', 'Match revision has changed'];
+      }
+      const operand = action === 'read' ? `read~${selected}~${capsule}` : action === 'new' ?
+        `new~${body.revision}~${capsule}` : `move~${body.revision}~${body.from}~${body.to}~${body.promotion}~${capsule}`;
+      const result = await invoke(operand);
+      const expected = action === 'read' ? currentRevision : currentRevision + 1;
+      if (!validateMatchEnvelope(result, selected, expected) || result.ok && action === 'read' && result.capsule !== capsule)
+        throw [502, 'INVALID_FABER_JSON', 'Faber returned an invalid match'];
+      if (!result.ok) throw [MATCH_ERRORS[result.error.code], result.error.code, result.error.message];
+      capsule = result.capsule; currentRevision = result.snapshot.revision;
+      send(item.res, 200, { ok: true, session, snapshot: result.snapshot });
+    } catch (error) {
+      const [status, code, message] = Array.isArray(error) ? error : [502, 'FABER_FAILURE', 'Faber query failed'];
+      send(item.res, status, envelope(code, message));
+    } finally { running = false; void dispatch(); }
+  }
+  function enqueue(item) {
+    if (closed || queue.length + Number(running) >= 4) { send(item.res, 503, envelope('BUSY', 'Match queue is full')); return; }
+    item.timer = setTimeout(() => {
+      const index = queue.indexOf(item);
+      if (index !== -1) { queue.splice(index, 1); send(item.res, 503, envelope('BUSY', 'Match queue expired')); }
+    }, queueTimeoutMs);
+    queue.push(item); void dispatch();
+  }
   const server = createHttpServer(async (req, res) => {
     let url;
     try { url = new URL(req.url, 'http://127.0.0.1'); } catch { send(res, 400, envelope('INVALID_REQUEST', 'Invalid URL')); return; }
+    if (['/api/match', '/api/match/move', '/api/match/new'].includes(url.pathname)) {
+      const action = url.pathname === '/api/match' ? 'read' : url.pathname.endsWith('/move') ? 'move' : 'new';
+      if (req.method !== (action === 'read' ? 'GET' : 'POST')) { send(res, 405, envelope('INVALID_REQUEST', 'Unsupported method')); return; }
+      if (!localAuthority(req)) { send(res, 400, envelope('INVALID_REQUEST', 'Local Host and Origin required')); return; }
+      if (action === 'read') {
+        const raw = url.searchParams.get('selected');
+        if ([...url.searchParams.keys()].length !== 1 || !/^(?:-1|0|[1-9]\d{0,2})$/.test(raw ?? '') || Number(raw) > 511) {
+          send(res, 400, envelope('INVALID_REQUEST', 'Expected one selected value')); return;
+        }
+        enqueue({ action, selected: Number(raw), res });
+      } else {
+        try {
+          if (url.search) throw [400, 'INVALID_REQUEST', 'Unexpected query'];
+          const body = await matchBody(req);
+          const keys = action === 'move' ? ['session', 'revision', 'from', 'to', 'promotion'] : ['session', 'revision'];
+          if (!exact(body, keys) || typeof body.session !== 'string' || body.session.length > 128 || !revision(body.revision) ||
+              action === 'move' && (!isCell(body.from) || !isCell(body.to) || !promotion(body.promotion)))
+            throw [400, 'INVALID_REQUEST', 'Invalid match request'];
+          enqueue({ action, body, selected: -1, res });
+        } catch (error) {
+          const [status, code, message] = Array.isArray(error) ? error : [400, 'INVALID_REQUEST', 'Invalid request body'];
+          send(res, status, envelope(code, message));
+        }
+      }
+      return;
+    }
     if (req.method !== 'GET') { send(res, 405, envelope('INVALID_REQUEST', 'Only GET is supported')); return; }
     if (url.pathname !== '/api/snapshot') {
       if (url.pathname.startsWith('/api/')) send(res, 404, envelope('NOT_FOUND', 'Not found'));
@@ -141,8 +283,11 @@ export function createServer({ execFileImpl = execFile, timeoutMs = TIMEOUT_MS }
       send(res, 502, envelope('FABER_FAILURE', 'Faber could not start'));
     }
   });
+  server.initializeMatch = initializeMatch;
   const close = server.close.bind(server);
   server.close = callback => {
+    closed = true;
+    for (const item of queue.splice(0)) { clearTimeout(item.timer); send(item.res, 503, envelope('BUSY', 'Server is closing')); }
     for (const entry of active) entry.child?.kill('SIGKILL');
     server.closeAllConnections();
     return close(callback);
@@ -162,10 +307,11 @@ export async function checkCompiler() {
   await run(['check', '--locale', 'en', ROOT]);
 }
 
-export async function startServer({ port = process.env.PORT ?? '8787', log = console.log } = {}) {
+export async function startServer({ port = process.env.PORT ?? '8787', log = console.log, checkCompilerImpl = checkCompiler, ...serverOptions } = {}) {
   if (!/^\d+$/.test(String(port)) || Number(port) > 65535) throw new Error('PORT must be an integer from 0 to 65535');
-  await checkCompiler();
-  const server = createServer();
+  await checkCompilerImpl();
+  const server = createServer(serverOptions);
+  await server.initializeMatch();
   await new Promise((ready, reject) => {
     server.once('error', reject);
     server.listen(Number(port), '127.0.0.1', () => { server.off('error', reject); ready(); });

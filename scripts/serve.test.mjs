@@ -182,3 +182,172 @@ test('startup checks pinned compiler and current source; busy requested port ref
     assert.deepEqual(failedLogs, []);
   } finally { await close(server); }
 });
+
+// These injected envelopes prove HTTP atomicity only; they do not implement chess.
+function matchEnvelope(revision = 0, selected = -1, capsule = `ZC1|opaque-${revision}`) {
+  return { ok: true, capsule, snapshot: { schemaVersion: 2, mode: 'match', revision, sideToMove: 1,
+    inCheck: false, result: 'active', selected, cells: Array(512).fill(0), moved: Array(512).fill(0), destinations: [], moves: [], lastMove: null } };
+}
+function matchExec(handler = () => undefined) {
+  const calls = [];
+  const execute = (file, args, options, callback) => {
+    const operand = args.at(-1); calls.push(operand);
+    const child = { killed: false, kill() { this.killed = true; callback(Object.assign(new Error('killed'), { killed: true }), ''); } };
+    setImmediate(() => {
+      if (child.killed) return;
+      const custom = handler(operand, callback, child, calls);
+      if (custom === null) return;
+      const parts = operand.split('~');
+      const rev = parts[0] === 'init' ? 0 : parts[0] === 'read' ? Number(parts.at(-1).split('-')[1]) : Number(parts[1]) + 1;
+      callback(null, JSON.stringify(custom ?? matchEnvelope(rev, parts[0] === 'read' ? Number(parts[1]) : -1)));
+    });
+    return child;
+  };
+  return { execute, calls };
+}
+async function matchHost(handler, options = {}) {
+  const mock = matchExec(handler);
+  const server = createServer({ execFileImpl: mock.execute, ...options });
+  const base = await listen(server);
+  return { server, base, ...mock };
+}
+function post(base, action, body) { return json(`${base}/api/match/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+async function readMatch(base) { return json(`${base}/api/match?selected=-1`); }
+
+test('match: startup initializes after compiler check and fails without readiness on bad init', async () => {
+  let checked = false;
+  const mock = matchExec(() => { assert.equal(checked, true); });
+  const logs = [];
+  const server = await startServer({ port: 0, checkCompilerImpl: async () => { checked = true; }, execFileImpl: mock.execute, log: t => logs.push(t) });
+  try { assert.deepEqual(mock.calls, ['init']); assert.equal(logs.length, 1); }
+  finally { await close(server); }
+  const bad = matchExec(() => ({ ok: true, snapshot: {} }));
+  await assert.rejects(startServer({ port: 0, checkCompilerImpl: async () => {}, execFileImpl: bad.execute, log() { assert.fail('false readiness'); } }));
+});
+
+test('match: opaque read, competing mutations, stale identity and new revision are atomic', async () => {
+  const h = await matchHost();
+  try {
+    const first = await readMatch(h.base);
+    assert.equal(first.status, 200); assert.equal(Object.hasOwn(first.body, 'capsule'), false);
+    const session = first.body.session;
+    const body = { session, revision: 0, from: 1, to: 2, promotion: 0 };
+    const results = await Promise.all([post(h.base, 'move', body), post(h.base, 'move', body)]);
+    assert.deepEqual(results.map(x => x.status).sort(), [200, 409]);
+    assert.equal(h.calls.filter(x => x.startsWith('move~')).length, 1);
+    assert.equal((await post(h.base, 'new', { session: 'old', revision: 1 })).body.error.code, 'STALE_SESSION');
+    const fresh = await post(h.base, 'new', { session, revision: 1 });
+    assert.equal(fresh.body.snapshot.revision, 2);
+    assert.equal((await readMatch(h.base)).body.snapshot.revision, 2);
+    assert.ok(h.calls.includes('new~1~ZC1|opaque-1'));
+  } finally { await close(h.server); }
+});
+
+test('match: exact request shapes, bounds, methods, size and origin reject before child', async () => {
+  const h = await matchHost();
+  try {
+    for (const q of ['', '?selected=-2', '?selected=512', '?selected=00', '?selected=-1&selected=0', '?selected=-1&capsule=x'])
+      assert.equal((await json(`${h.base}/api/match${q}`)).status, 400, q);
+    assert.equal((await json(`${h.base}/api/match`, { method: 'POST' })).status, 405);
+    assert.equal((await post(h.base, 'new', { session: 'x', revision: 0, capsule: 'x' })).status, 400);
+    assert.equal((await post(h.base, 'move', { session: 'x', revision: 0, from: 1, to: 2, promotion: 6 })).status, 400);
+    for (const [body, headers, status] of [['{', { 'Content-Type': 'application/json' }, 400], ['{}', {}, 400], [' '.repeat(1025), { 'Content-Type': 'application/json' }, 413], ['{}', { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, 400]])
+      assert.equal((await json(`${h.base}/api/match/new`, { method: 'POST', headers, body })).status, status);
+    assert.equal(h.calls.length, 0);
+  } finally { await close(h.server); }
+});
+
+test('match: semantic failure retains capsule and recovers on next action', async () => {
+  let rejected = false;
+  const h = await matchHost(op => {
+    if (op.startsWith('move~') && !rejected) { rejected = true; return { ok: false, error: { code: 'ILLEGAL_MOVE', message: 'Move is not legal' } }; }
+  });
+  try {
+    const { session } = (await readMatch(h.base)).body;
+    const body = { session, revision: 0, from: 1, to: 2, promotion: 0 };
+    assert.equal((await post(h.base, 'move', body)).status, 422);
+    assert.equal((await readMatch(h.base)).body.snapshot.revision, 0);
+    assert.equal((await post(h.base, 'move', body)).body.snapshot.revision, 1);
+  } finally { await close(h.server); }
+});
+
+test('match: malformed envelopes and capsules never replace retained state', async () => {
+  let mutate;
+  const h = await matchHost(op => { if (op.startsWith('move~')) { const result = matchEnvelope(1); mutate(result); return result; } });
+  try {
+    const { session } = (await readMatch(h.base)).body;
+    for (const change of [v => v.capsule = 'x'.repeat(16385), v => v.capsule = 'é', v => v.capsule = 'x~x', v => v.snapshot.revision = 2,
+      v => v.snapshot.cells.pop(), v => v.snapshot.moves = [{ to: 1, kind: 'move', promotions: [] }], v => v.snapshot.sideToMove = 0,
+      v => v.snapshot.result = 'other', v => v.snapshot.extra = true]) {
+      mutate = change;
+      assert.equal((await post(h.base, 'move', { session, revision: 0, from: 1, to: 2, promotion: 0 })).status, 502);
+      assert.equal((await readMatch(h.base)).body.snapshot.revision, 0);
+    }
+  } finally { await close(h.server); }
+});
+
+test('match: dispatch survives disconnect and later fresh read sees committed action', async () => {
+  let complete, dispatched;
+  const seen = new Promise(resolve => dispatched = resolve);
+  const h = await matchHost((op, callback) => {
+    if (op.startsWith('move~')) { complete = () => callback(null, JSON.stringify(matchEnvelope(1))); dispatched(); return null; }
+  });
+  try {
+    const { session } = (await readMatch(h.base)).body;
+    const req = request(`${h.base}/api/match/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    req.on('error', () => {}); req.end(JSON.stringify({ session, revision: 0, from: 1, to: 2, promotion: 0 }));
+    await seen; req.destroy(); complete();
+    assert.equal((await readMatch(h.base)).body.snapshot.revision, 1);
+  } finally { await close(h.server); }
+});
+
+test('match: queue bounded to four and waiting entries expire without invocation', async () => {
+  let complete, dispatched;
+  const seen = new Promise(resolve => dispatched = resolve);
+  const h = await matchHost((op, callback) => {
+    if (op.startsWith('read~')) { complete = () => callback(null, JSON.stringify(matchEnvelope())); dispatched(); return null; }
+  }, { queueTimeoutMs: 40 });
+  try {
+    const first = readMatch(h.base); await seen;
+    const queued = [readMatch(h.base), readMatch(h.base), readMatch(h.base)];
+    const overflow = await readMatch(h.base);
+    assert.equal(overflow.status, 503);
+    for (const response of await Promise.all(queued)) assert.equal(response.status, 503);
+    assert.equal(h.calls.length, 2); complete(); assert.equal((await first).status, 200);
+  } finally { await close(h.server); }
+});
+
+test('match: global quota shared with geometry and shutdown kills match child', async () => {
+  const children = [];
+  const h = await matchHost((op, callback, child) => {
+    if (op === 'init') return undefined;
+    children.push(child); return null;
+  });
+  await h.server.initializeMatch();
+  const requests = [request(`${h.base}/api/snapshot?fixture=initial&selected=-1`), request(`${h.base}/api/snapshot?fixture=initial&selected=0`)];
+  for (const req of requests) { req.on('error', () => {}); req.end(); }
+  while (children.length < 2) await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await readMatch(h.base)).status, 503);
+  for (const req of requests) req.destroy();
+  await close(h.server);
+  assert.ok(children.every(child => child.killed));
+});
+
+for (const mode of ['timeout', 'invalid']) {
+  test(`match: ${mode} failure preserves retained state and permits recovery`, async () => {
+    let fail = true;
+    const h = await matchHost((op, callback) => {
+      if (!op.startsWith('move~') || !fail) return undefined;
+      fail = false;
+      if (mode === 'timeout') callback(Object.assign(new Error('timeout'), { killed: true }), '');
+      else callback(null, 'invalid');
+      return null;
+    });
+    try {
+      const { session } = (await readMatch(h.base)).body;
+      const body = { session, revision: 0, from: 1, to: 2, promotion: 0 };
+      assert.equal((await post(h.base, 'move', body)).status, mode === 'timeout' ? 504 : 502);
+      assert.equal((await post(h.base, 'move', body)).body.snapshot.revision, 1);
+    } finally { await close(h.server); }
+  });
+}
