@@ -123,17 +123,67 @@ fn normalAllowed(game.Match value, i32 from, i32 to) → bool {
     return safe(candidate,game.side(value))
 }
 
+fn enPassantEligible(game.Match value, i32 from, i32 to) → bool {
+    if to ≢ game.epTarget(value) or to < 0 or to > 511 { return false }
+    const i32 captured ← game.epCaptured(value)
+    const i32 axis ← game.epAxis(value)
+    if captured < 0 or captured > 511 or (axis ≢ 1 and axis ≢ 2) { return false }
+    const i32 side ← game.side(value)
+    const i8 piece ← game.piece(value,from)
+    if side ≡ 1 and piece ≢ 6 { return false }
+    if side ≡ -1 and piece ≢ -6 { return false }
+    if game.piece(value,to) ≢ 0 or value.moved[captured] ≢ 1 { return false }
+    if side ≡ 1 and game.piece(value,captured) ≢ -6 { return false }
+    if side ≡ -1 and game.piece(value,captured) ≢ 6 { return false }
+    const i32 fileDifference ← to % 8 - from % 8
+    if fileDifference ≢ -1 and fileDifference ≢ 1 { return false }
+    var i32 offset ← 8
+    if axis ≡ 1 {
+        if to / 64 ≢ from / 64 { return false }
+        const i32 rankDifference ← (to / 8) % 8 - (from / 8) % 8
+        if rankDifference ≢ side { return false }
+    } else {
+        offset ← 64
+        if (to / 8) % 8 ≢ (from / 8) % 8 { return false }
+        const i32 tierDifference ← to / 64 - from / 64
+        if tierDifference ≢ side { return false }
+    }
+    const i32 expectedCaptured ← to - side * offset
+    const i32 priorSource ← to + side * offset
+    if captured ≢ expectedCaptured or priorSource < 0 or priorSource > 511 { return false }
+    if game.piece(value,priorSource) ≢ 0 { return false }
+    if game.lastFrom(value) ≢ priorSource or game.lastTo(value) ≢ captured or game.lastPromotion(value) ≢ 0 { return false }
+    return true
+}
+
+fn enPassantAllowed(game.Match value, i32 from, i32 to) → bool {
+    if not enPassantEligible(value,from,to) { return false }
+    const game.Match candidate ← construct(value,from,to,0,game.epCaptured(value),-1,-1)
+    return safe(candidate,game.side(value))
+}
+
 @ public
 fn moves(game.Match value, i32 selected) → list<Move> {
     var list<Move> options ← empty
     if selected < 0 or selected > 511 or game.result(value) ≢ 0 { return options }
     const i8 piece ← game.piece(value,selected)
     if game.color(piece) ≢ game.side(value) { return options }
-    for from geometry.previews(value.board,value.moved,selected) const to {
-        # Promotion is deliberately unavailable until its rule unit lands.
-        if not promotes(piece,to) and normalAllowed(value,selected,to) {
-            var string kind ← "move"
+    var list<i32> targets ← geometry.previews(value.board,value.moved,selected)
+    const i32 skipped ← game.epTarget(value)
+    if enPassantAllowed(value,selected,skipped) { targets.append(skipped) }
+    targets.sort()
+    for from targets const to {
+        var string kind ← "move"
+        var bool admitted ← false
+        if enPassantAllowed(value,selected,to) {
+            kind ← "en-passant"
+            admitted ← true
+        } else {
+            # Promotion is deliberately unavailable until its rule unit lands.
+            admitted ← not promotes(piece,to) and normalAllowed(value,selected,to)
             if game.piece(value,to) ≢ 0 { kind ← "capture" }
+        }
+        if admitted {
             const list<i32> promotions ← empty
             options.append(Move { to = to, kind = kind, promotions = promotions })
         }
@@ -150,6 +200,10 @@ fn move(game.Match value, i32 expectedRevision, i32 from, i32 to, i32 promotion)
     const i8 piece ← game.piece(value,from)
     if piece ≡ 0 { return rejected("ILLEGAL_MOVE") }
     if game.color(piece) ≢ game.side(value) { return rejected("NOT_YOUR_TURN") }
+    if enPassantAllowed(value,from,to) {
+        if promotion ≢ 0 { return rejected("INVALID_PROMOTION") }
+        return accepted(construct(value,from,to,0,game.epCaptured(value),-1,-1))
+    }
     if not normalAllowed(value,from,to) { return rejected("ILLEGAL_MOVE") }
     if promotes(piece,to) {
         if promotion ≡ 0 { return rejected("PROMOTION_REQUIRED") }
