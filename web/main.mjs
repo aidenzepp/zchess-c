@@ -21,8 +21,14 @@ function update(state) {
     catalog = nextCatalog;
     if (state.fixtures.length) fixture.replaceChildren(...state.fixtures.map(id => new Option(id, id)));
   }
-  fixture.disabled = state.fixtures.length === 0;
-  if (state.fixtures.length) fixture.value = state.requested.fixture;
+  element('mode').value = state.mode;
+  element('mode').disabled = state.mutationPending;
+  element('fixture-control').hidden = state.mode !== 'geometry';
+  fixture.disabled = state.mode !== 'geometry' || state.fixtures.length === 0;
+  element('new-game').hidden = state.mode !== 'play';
+  element('new-game').disabled = pending || !snapshot;
+  element('clear').disabled = state.mutationPending || Boolean(state.promotion);
+  if (state.mode === 'geometry' && state.fixtures.length) fixture.value = state.requested.fixture;
   element('view').value = presentation.view;
   element('piece-style').value = presentation.pieceStyle;
   element('plane').value = presentation.plane;
@@ -37,7 +43,23 @@ function update(state) {
   slice.value = String(presentation.fixedIndex);
   element('arena').setAttribute('aria-busy', String(pending));
   const status = element('request-status');
-  status.textContent = pending ? `Loading ${state.requested.fixture} · ${coordinateLabel(state.requested.selected)}…` : error ? `Snapshot failed: ${error}` : `${snapshot.fixtureId} · current snapshot`;
+  const identity = state.mode === 'play' ? 'shared match' : state.requested.fixture;
+  status.textContent = error ? error : pending ? `${state.mutationPending ? 'Applying action' : 'Loading'} ${identity}…` : `${identity} · current snapshot`;
+  const match = snapshot?.mode === 'match' ? snapshot : null;
+  const side = match?.sideToMove === 1 ? 'White' : 'Black';
+  element('match-status').hidden = state.mode !== 'play';
+  element('turn').textContent = match ? match.result === 'active' ? `${side} to move${match.inCheck ? ' · Check' : ''}` : ({ 'white-wins': 'White wins by checkmate', 'black-wins': 'Black wins by checkmate', stalemate: 'Draw by stalemate' }[match.result]) : 'Match unavailable';
+  element('last-move').textContent = match?.lastMove ? `${coordinateLabel(match.lastMove.from)} → ${coordinateLabel(match.lastMove.to)}${match.lastMove.promotion ? ` = ${{ 2: 'Queen', 3: 'Rook', 4: 'Bishop', 5: 'Knight' }[match.lastMove.promotion]}` : ''}` : 'No moves yet';
+  element('promotion').hidden = !state.promotion;
+  if (state.promotion) {
+    element('promotion-choices').replaceChildren(...state.promotion.choices.map(kind => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = { 2: 'Queen', 3: 'Rook', 4: 'Bishop', 5: 'Knight' }[kind];
+      button.addEventListener('click', () => controller.promote(kind));
+      return button;
+    }));
+  }
+
   status.classList.toggle('error', Boolean(error));
   element('selected').textContent = snapshot ? `${coordinateLabel(snapshot.selected)}${snapshot.selected === -1 ? '' : ` · ID ${snapshot.selected}`}` : pending ? 'Pending' : 'Unavailable';
   element('count').textContent = snapshot ? String(snapshot.destinations.length) : '—';
@@ -48,6 +70,9 @@ function update(state) {
   }
 }
 controller = createController({ onChange: update });
+element('mode').addEventListener('change', event => controller.setMode(event.target.value));
+element('new-game').addEventListener('click', () => controller.newGame());
+element('promotion-cancel').addEventListener('click', () => controller.cancelPromotion());
 fixture.addEventListener('change', () => controller.selectFixture(fixture.value));
 element('view').addEventListener('change', event => controller.setPresentation({ view: event.target.value }));
 element('piece-style').addEventListener('change', event => controller.setPresentation({ pieceStyle: event.target.value }));

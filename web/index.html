@@ -3,34 +3,38 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ZChess · Geometry lab</title>
+  <title>ZChess · Local play</title>
   <link rel="stylesheet" href="/style.css">
   <script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js","three/addons/":"/vendor/three/examples/jsm/"}}</script>
   <script type="module" src="/main.mjs"></script>
 </head>
 <body>
   <main>
-    <header><p class="eyebrow">ZCHESS / 8 × 8 × 8</p><h1>Geometry lab</h1><p>Inspect a fixture. Select a cell to see its movement preview in space or on a slice.</p></header>
-    <aside class="disclaimer"><strong>Geometry preview only.</strong> Initial setup and bishop geometry are provisional. Bishops use plane diagonals, excluding body diagonals. Pawns advance along rank or tier separately; combined rank+tier movement is excluded. No moves, king safety, castling, en passant or promotion.</aside>
+    <header><p class="eyebrow">ZCHESS / 8 × 8 × 8</p><h1>ZChess</h1><p>Two players, one arena. Select your piece, then a highlighted destination.</p></header>
+    <aside class="disclaimer">Local shared-screen play. Checkmate and stalemate are supported; repetition, move-count and insufficient-material draws are deferred. This match is shared across tabs and lost when the server stops.</aside>
     <section class="toolbar" aria-label="Arena controls">
-      <label>Fixture<select id="fixture" disabled><option>Loading fixtures…</option></select></label>
+      <label>Mode<select id="mode"><option value="play">Play</option><option value="geometry">Geometry sandbox</option></select></label>
+      <label id="fixture-control" hidden>Fixture<select id="fixture" disabled><option>Loading fixtures…</option></select></label>
       <label>View<select id="view"><option value="space">3D space</option><option value="slices">2D slice</option></select></label>
       <label>Pieces<select id="piece-style"><option value="sprites">Sprites</option><option value="text">Text</option></select></label>
       <div id="slice-controls" hidden>
         <label>Plane<select id="plane"><option value="file-rank">File / rank · fixed tier</option><option value="file-tier">File / tier · fixed rank</option><option value="rank-tier">Rank / tier · fixed file</option></select></label>
         <label><span id="slice-label">Tier</span><select id="slice"></select></label>
       </div>
+      <button id="new-game" type="button" disabled>New game</button>
       <button id="reset" type="button">Reset camera</button>
       <button id="clear" type="button">Clear selection</button>
     </section>
     <p id="request-status" role="status" aria-live="polite">Loading snapshot…</p>
+    <section id="match-status" aria-label="Match status" aria-live="polite"><strong id="turn">Loading match…</strong><p>Last move: <span id="last-move">No moves yet</span></p></section>
+    <section id="promotion" aria-label="Promotion choice" hidden><strong>Choose promotion</strong><div id="promotion-choices"></div><button id="promotion-cancel" type="button">Cancel</button></section>
     <section id="arena" aria-label="Arena viewer" aria-busy="true"><div id="space"></div><div id="slices" hidden></div></section>
     <section class="readout" aria-label="Snapshot details">
       <p>Selected <strong id="selected">None</strong></p><p>Destinations <strong id="count">—</strong></p>
       <p class="legend">Sprites show the existing white/black piece images. Text: K king · Q queen · R rook · B bishop · N knight · P pawn; labels show piece color. Coordinates: file A–H, rank 1–8, tier S–Z.</p>
       <p id="targets">No current snapshot.</p>
     </section>
-    <details><summary>Controls and preview notes</summary><p>3D: drag to orbit, right-drag or Shift-drag to pan, wheel to zoom. Focus the canvas: arrows orbit, WASD pan, +/− zoom, R reset. 2D: click a square. Changing the view, slice or piece style preserves the selected cell and preview. Sprites are the default; choose Text if an image fails to load. Selecting a cell requests a fresh Faber snapshot; it never moves a piece.</p><p>The initial fixture reproduces the provisional 48-piece setup. Orange/gold marks the selection; green marks supplied destinations. A selection outside a slice is reported beneath it.</p></details>
+    <details><summary>Controls and rules</summary><p>Play: click your piece, then a green destination. Choose a promotion when offered, or Cancel to keep the position. White moves first. New game resets the shared match; refreshing this page reads the existing match. Geometry sandbox inspects fixed positions without changing the game.</p><p>3D: drag to orbit, right-drag or Shift-drag to pan, wheel to zoom. Focus the canvas: arrows orbit, WASD pan, +/− zoom, R reset. 2D: click a square. Changing view, slice or piece style preserves selection and never moves a piece. Sprites are the default; choose Text if an image fails to load.</p><p>The arena starts with 48 pieces. Bishops follow plane diagonals, excluding body diagonals. Pawns advance along rank or tier separately. Orange/gold marks selection; green marks Faber-supplied destinations. A selection outside a slice is reported beneath it.</p></details>
   </main>
 </body>
 </html>

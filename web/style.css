@@ -26,3 +26,7 @@ details { border-top: 1px solid #3f5148; padding: 14px 0; font-size: 14px; }
 summary { cursor: pointer; }
 [hidden] { display: none !important; }
 @media (max-width: 600px) { main { padding-top: 18px; } .toolbar > label { flex: 1; } select { max-width: 100%; } #slice-controls { width: 100%; } }
+
+#match-status { padding: 8px 0 16px; }
+#promotion { padding: 16px; margin-bottom: 14px; border: 2px solid #e8b762; background: #222723; }
+#promotion-choices { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
