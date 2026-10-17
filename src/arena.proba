@@ -92,7 +92,7 @@ describe "arena" {
         assert emptyCell.contains("\"destinations\":[]")
         const string occupied ← arena.snapshot("rook-center", 219)
         assert occupied.contains("\"selected\":219")
-        assert occupied.contains("\"destinations\":[]")
+        assert occupied.contains("\"destinations\":[27,91,155,195,203,211,216,217,218,220,221,222,223,227,235,243,251,283,347,411,475]")
         assert arena.snapshot("initial", -1) ≡ unselected
         assert arena.snapshot("rook-center", 219) ≡ occupied
     }
