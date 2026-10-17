@@ -1,0 +1,183 @@
+import from "./match" game
+import from "./rules" rules
+
+fn cage(i32 winningSide) → game.Match {
+    var game.Match value ← game.blank()
+    if winningSide ≡ 1 {
+        game.put(value,0,-1)
+        game.put(value,146,1)
+        game.put(value,73,2)
+    } else {
+        game.put(value,0,1)
+        game.put(value,146,-1)
+        game.put(value,73,-2)
+    }
+    game.setSide(value,-winningSide)
+    return value
+}
+
+fn has(game.Match value, i32 selected, i32 to, string kind) → bool {
+    for from rules.moves(value,selected) const option {
+        if option.to ≡ to and option.kind ≡ kind { return true }
+    }
+    return false
+}
+
+describe "results" {
+    test "initial and bare kings remain active with independent pure reply queries" {
+        const game.Match initial ← game.initial()
+        const string before ← game.encode(initial)
+        assert rules.hasReply(initial)
+        assert not rules.inCheck(initial,1)
+        const game.Match result ← rules.adjudicate(initial)
+        assert game.result(result) ≡ 0
+        assert game.encode(initial) ≡ before
+        var game.Match kings ← game.blank()
+        game.put(kings,0,1)
+        game.put(kings,511,-1)
+        assert game.result(rules.adjudicate(kings)) ≡ 0
+        assert rules.hasReply(kings)
+    }
+    test "active check with a legal escape is not checkmate" {
+        var game.Match value ← game.blank()
+        game.put(value,0,-1)
+        game.put(value,146,1)
+        game.put(value,56,3)
+        game.setSide(value,-1)
+        assert rules.inCheck(value,-1)
+        assert rules.hasReply(value)
+        assert game.result(rules.adjudicate(value)) ≡ 0
+        const rules.Outcome escaped ← rules.move(value,0,0,1,0)
+        assert escaped.error ≡ ""
+        assert game.result(escaped.values[0]) ≡ 0
+        assert not rules.inCheck(escaped.values[0],-1)
+    }
+    test "completed mating move records correct winner and losing side for both colors" {
+        const list<i32> sides ← [1,-1]
+        const list<i32> results ← [1,2]
+        for range 0‥2 const color {
+            var game.Match value ← cage(sides[color])
+            game.setSide(value,sides[color])
+            if sides[color] ≡ 1 { game.put(value,57,3) } else { game.put(value,57,-3) }
+            const i32 losingSide ← -sides[color]
+            assert not rules.inCheck(value,losingSide)
+            assert game.validate(game.encode(value)) ≡ "OK"
+            const string before ← game.encode(value)
+            const rules.Outcome result ← rules.move(value,0,57,56,0)
+            assert result.error ≡ ""
+            const game.Match mate ← result.values[0]
+            assert game.result(mate) ≡ results[color]
+            assert game.side(mate) ≡ losingSide
+            assert game.revision(mate) ≡ 1
+            assert rules.inCheck(mate,losingSide)
+            assert not rules.hasReply(mate)
+            assert rules.moves(mate,0).length() ≡ 0
+            assert game.validate(game.encode(mate)) ≡ "OK"
+            assert game.encode(value) ≡ before
+            const string terminal ← game.encode(mate)
+            const rules.Outcome rejected ← rules.move(mate,1,0,1,0)
+            assert rejected.error ≡ "GAME_OVER"
+            assert rejected.values.length() ≡ 0
+            assert game.encode(mate) ≡ terminal
+        }
+    }
+    test "completed stalemating move leaves losing side without check and remains readable" {
+        var game.Match value ← cage(1)
+        game.put(value,73,0)
+        game.put(value,74,2)
+        game.setSide(value,1)
+        assert not rules.inCheck(value,-1)
+        const rules.Outcome result ← rules.move(value,0,74,73,0)
+        assert result.error ≡ ""
+        const game.Match stale ← result.values[0]
+        assert game.result(stale) ≡ 3
+        assert game.side(stale) ≡ -1
+        assert not rules.inCheck(stale,-1)
+        assert not rules.hasReply(stale)
+        assert rules.moves(stale,0).length() ≡ 0
+        assert game.open(game.encode(stale)).length() ≡ 1
+        assert game.lastMoveJson(stale) ≡ "{\"from\":74,\"to\":73,\"promotion\":0}"
+    }
+    test "en passant can be the only legal reply to a checking pawn" {
+        var game.Match value ← cage(-1)
+        game.put(value,8,6)
+        value.moved[8] ← 1
+        game.put(value,9,-6)
+        value.moved[9] ← 1
+        game.setEnPassant(value,17,9,1)
+        game.setLastMove(value,25,9,0)
+        game.setRevision(value,1)
+        assert game.validate(game.encode(value)) ≡ "OK"
+        assert rules.inCheck(value,1)
+        assert rules.moves(value,0).length() ≡ 0
+        const list<rules.Move> pawn ← rules.moves(value,8)
+        assert pawn.length() ≡ 1
+        assert pawn[0].to ≡ 17
+        assert pawn[0].kind ≡ "en-passant"
+        assert rules.hasReply(value)
+        assert game.result(rules.adjudicate(value)) ≡ 0
+        var game.Match without ← game.copy(value)
+        game.clearEnPassant(without)
+        assert not rules.hasReply(without)
+        assert game.result(rules.adjudicate(without)) ≡ 2
+        const rules.Outcome escaped ← rules.move(value,1,8,17,0)
+        assert escaped.error ≡ ""
+        assert not rules.inCheck(escaped.values[0],1)
+    }
+    test "promotion choices can be the only legal reply to a cross tier check" {
+        var game.Match value ← cage(-1)
+        game.put(value,504,-4)
+        game.put(value,497,6)
+        assert game.validate(game.encode(value)) ≡ "OK"
+        assert rules.inCheck(value,1)
+        assert rules.moves(value,0).length() ≡ 0
+        const list<rules.Move> pawn ← rules.moves(value,497)
+        assert pawn.length() ≡ 1
+        assert pawn[0].to ≡ 504
+        assert pawn[0].promotions.length() ≡ 4
+        assert rules.hasReply(value)
+        assert game.result(rules.adjudicate(value)) ≡ 0
+        var game.Match without ← game.copy(value)
+        game.put(without,497,0)
+        assert not rules.hasReply(without)
+        assert game.result(rules.adjudicate(without)) ≡ 2
+        for range 2‥6 const promotion {
+            const rules.Outcome escaped ← rules.move(value,0,497,504,promotion)
+            assert escaped.error ≡ ""
+            assert not rules.inCheck(escaped.values[0],1)
+        }
+    }
+    test "castling remains a complete legal descriptor in active reply search" {
+        var game.Match value ← game.blank()
+        game.put(value,4,1)
+        game.put(value,7,3)
+        game.put(value,508,-1)
+        value.meta[3] ← 1
+        assert has(value,4,6,"castle")
+        assert rules.hasReply(value)
+        assert game.result(rules.adjudicate(value)) ≡ 0
+        const rules.Outcome castled ← rules.move(value,0,4,6,0)
+        assert castled.error ≡ ""
+        assert game.result(castled.values[0]) ≡ 0
+    }
+    test "read descriptors and mutation share sorted unique legal normal choices" {
+        const game.Match value ← game.initial()
+        const string before ← game.encode(value)
+        const list<rules.Move> choices ← rules.moves(value,72)
+        assert choices.length() > 0
+        var i32 previous ← -1
+        for from choices const choice {
+            assert choice.to > previous
+            previous ← choice.to
+            assert choice.promotions.length() ≡ 0
+            assert choice.kind ≡ "move"
+            const rules.Outcome result ← rules.move(value,0,72,choice.to,0)
+            assert result.error ≡ ""
+            assert game.result(result.values[0]) ≡ 0
+        }
+        assert game.encode(value) ≡ before
+        assert rules.moves(value,-1).length() ≡ 0
+        assert rules.moves(value,432).length() ≡ 0
+        assert rules.moves(value,80).length() ≡ 0
+    }
+}

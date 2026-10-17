@@ -21,7 +21,7 @@ fn rejected(string code) → Outcome {
 }
 
 fn accepted(game.Match value) → Outcome {
-    return Outcome { error = "", values = [value] }
+    return Outcome { error = "", values = [adjudicate(value)] }
 }
 
 @ public
@@ -214,48 +214,85 @@ fn castleAllowed(game.Match value, i32 from, i32 to) → bool {
     return safe(final,game.side(value))
 }
 
+fn candidateTargets(game.Match value, i32 selected) → list<i32> {
+    var list<i32> targets ← geometry.previews(value.board,value.moved,selected)
+    const i32 skipped ← game.epTarget(value)
+    if enPassantEligible(value,selected,skipped) { targets.append(skipped) }
+    const i32 queenCastle ← selected - 2
+    const i32 kingCastle ← selected + 2
+    if castleRook(value,selected,queenCastle) ≥ 0 { targets.append(queenCastle) }
+    if castleRook(value,selected,kingCastle) ≥ 0 { targets.append(kingCastle) }
+    targets.sort()
+    return targets
+}
+
+fn classify(game.Match value, i32 selected, i32 to, bool firstOnly) → list<Move> {
+    var list<Move> options ← empty
+    var string kind ← "move"
+    var bool admitted ← false
+    var list<i32> promotions ← empty
+    if castleAllowed(value,selected,to) {
+        kind ← "castle"
+        admitted ← true
+    } else {
+        if enPassantAllowed(value,selected,to) {
+            kind ← "en-passant"
+            admitted ← true
+        } else {
+            if promotes(game.piece(value,selected),to) {
+                for range 2‥6 const choice {
+                    if normalAllowed(value,selected,to,choice) {
+                        promotions.append(choice)
+                        if firstOnly { break }
+                    }
+                }
+                admitted ← promotions.length() > 0
+            } else {
+                admitted ← normalAllowed(value,selected,to,0)
+            }
+            if game.piece(value,to) ≢ 0 { kind ← "capture" }
+        }
+    }
+    if admitted { options.append(Move { to = to, kind = kind, promotions = promotions }) }
+    return options
+}
+
 @ public
 fn moves(game.Match value, i32 selected) → list<Move> {
     var list<Move> options ← empty
     if selected < 0 or selected > 511 or game.result(value) ≢ 0 { return options }
-    const i8 piece ← game.piece(value,selected)
-    if game.color(piece) ≢ game.side(value) { return options }
-    var list<i32> targets ← geometry.previews(value.board,value.moved,selected)
-    const i32 skipped ← game.epTarget(value)
-    if enPassantAllowed(value,selected,skipped) { targets.append(skipped) }
-    const i32 queenCastle ← selected - 2
-    const i32 kingCastle ← selected + 2
-    if castleAllowed(value,selected,queenCastle) { targets.append(queenCastle) }
-    if castleAllowed(value,selected,kingCastle) { targets.append(kingCastle) }
-    targets.sort()
-    for from targets const to {
-        var string kind ← "move"
-        var bool admitted ← false
-        var list<i32> promotions ← empty
-        if castleAllowed(value,selected,to) {
-            kind ← "castle"
-            admitted ← true
-        } else {
-            if enPassantAllowed(value,selected,to) {
-                kind ← "en-passant"
-                admitted ← true
-            } else {
-                if promotes(piece,to) {
-                    for range 2‥6 const choice {
-                        if normalAllowed(value,selected,to,choice) { promotions.append(choice) }
-                    }
-                    admitted ← promotions.length() > 0
-                } else {
-                    admitted ← normalAllowed(value,selected,to,0)
-                }
-                if game.piece(value,to) ≢ 0 { kind ← "capture" }
-            }
-        }
-        if admitted {
-            options.append(Move { to = to, kind = kind, promotions = promotions })
-        }
+    if game.color(game.piece(value,selected)) ≢ game.side(value) { return options }
+    for from candidateTargets(value,selected) const to {
+        for from classify(value,selected,to,false) const option { options.append(option) }
     }
     return options
+}
+
+@ public
+fn hasReply(game.Match value) → bool {
+    if game.result(value) ≢ 0 { return false }
+    for range 0‥512 const selected {
+        if game.color(game.piece(value,selected)) ≡ game.side(value) {
+            for from candidateTargets(value,selected) const to {
+                if classify(value,selected,to,true).length() > 0 { return true }
+            }
+        }
+    }
+    return false
+}
+
+@ public
+fn adjudicate(game.Match value) → game.Match {
+    var game.Match next ← game.copy(value)
+    game.setResult(next,0)
+    if not hasReply(next) {
+        if inCheck(next,game.side(next)) {
+            if game.side(next) ≡ 1 { game.setResult(next,2) } else { game.setResult(next,1) }
+        } else {
+            game.setResult(next,3)
+        }
+    }
+    return next
 }
 
 @ public
