@@ -1,6 +1,6 @@
 # Milestone 2 delivery: admission first
 
-Status: approved goal; A mechanism admitted. Downstream exact contract and logical units below are READY for delivery review, not a claim of playable integration.
+Status: all milestone 2 units and integration/browser gates accepted. Local playable build ready for operator review; see `docs/evidence/m2-validation.md`, `m2-format-followup.md` and `m2-playable-browser.md` for observed passes and limits.
 Goal: `docs/plans/milestone-2-playable.md`. Repository: `/Users/sterling/Documents/dev/workspaces/personal/zchess`; branch: `codex/faber-rebuild`.
 
 ## Approved boundary

@@ -1,6 +1,6 @@
 # Milestone 2: playable local zchess
 
-Status: operator approved this plan and its three outstanding details on 2026-10-17. Continuous implementation through a playable local browser is authorized; first dispatch is the isolated state admission unit in `milestone-2-delivery.md`. Downstream implementation remains gated on that receipt.
+Status: operator-approved milestone implemented and verified for local play. State admission, 88 Faber tests, 51 Node tests, real HTTP/browser witnesses and independent reviews are recorded under `docs/evidence/`. Ready for operator play; standalone formatter limitations remain documented.
 
 ## Outcome and boundaries
 
