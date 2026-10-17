@@ -183,9 +183,18 @@ describe "rules" {
         var game.Match value ← focused()
         game.put(value,496,6)
         unchangedFailure(value,0,496,504,0,"PROMOTION_REQUIRED")
-        unchangedFailure(value,0,496,504,2,"INVALID_PROMOTION")
+        const rules.Outcome promotion ← rules.move(value,0,496,504,2)
+        assert promotion.error ≡ ""
+        assert game.piece(promotion.values[0],504) ≡ 2
         unchangedFailure(value,0,496,504,6,"INVALID_PROMOTION")
-        assert not has(value,496,504)
+        assert has(value,496,504)
+        for from rules.moves(value,496) const option {
+            if option.to ≡ 504 {
+                assert option.promotions.length() ≡ 4
+                assert option.promotions[0] ≡ 2
+                assert option.promotions[3] ≡ 5
+            }
+        }
         game.put(value,219,3)
         unchangedFailure(value,0,219,283,2,"INVALID_PROMOTION")
     }

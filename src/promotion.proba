@@ -1,0 +1,159 @@
+import from "./match" game
+import from "./rules" rules
+
+fn boundary(i32 side, i32 axis, bool capture) → game.Match {
+    var game.Match value ← game.blank()
+    game.put(value,4,1)
+    game.put(value,508,-1)
+    game.setSide(value,side)
+    var i32 source ← 496
+    var i32 target ← 504
+    if axis ≡ 2 { source ← 440 }
+    if side ≡ -1 {
+        source ← 8
+        target ← 0
+        if axis ≡ 2 { source ← 64 }
+    }
+    if side ≡ 1 { game.put(value,source,6) } else { game.put(value,source,-6) }
+    if capture {
+        target ← target + 1
+        if side ≡ 1 { game.put(value,target,-3) } else { game.put(value,target,3) }
+        value.moved[target] ← 1
+    }
+    return value
+}
+
+fn assertChoice(game.Match value, i32 source, i32 target, bool capture) → void {
+    var bool found ← false
+    const string before ← game.encode(value)
+    for from rules.moves(value,source) const option {
+        if option.to ≡ target {
+            found ← true
+            if capture { assert option.kind ≡ "capture" } else { assert option.kind ≡ "move" }
+            assert option.promotions.length() ≡ 4
+            const list<i32> choices ← [2,3,4,5]
+            for range 0‥4 const index { assert option.promotions[index] ≡ choices[index] }
+        }
+    }
+    assert found
+    assert game.encode(value) ≡ before
+}
+
+fn assertRejected(game.Match value, i32 source, i32 target, i32 promotion, string error) → void {
+    const string before ← game.encode(value)
+    const rules.Outcome result ← rules.move(value,game.revision(value),source,target,promotion)
+    assert result.error ≡ error
+    assert result.values.length() ≡ 0
+    assert game.encode(value) ≡ before
+}
+
+describe "promotion" {
+    test "all four kinds both colors both approach axes quiet and capture commit atomically" {
+        const list<i32> sides ← [1,-1]
+        const list<i8> kinds ← [0,0,2,3,4,5]
+        for range 0‥2 const color {
+            for range 1‥3 const axis {
+                for range 0‥2 const captureFlag {
+                    const bool capture ← captureFlag ≡ 1
+                    const game.Match value ← boundary(sides[color],axis,capture)
+                    var i32 source ← 496
+                    var i32 target ← 504
+                    if axis ≡ 2 { source ← 440 }
+                    if sides[color] ≡ -1 {
+                        source ← 8
+                        target ← 0
+                        if axis ≡ 2 { source ← 64 }
+                    }
+                    if capture { target ← target + 1 }
+                    assertChoice(value,source,target,capture)
+                    const string before ← game.encode(value)
+                    for range 2‥6 const choice {
+                        const rules.Outcome result ← rules.move(value,0,source,target,choice)
+                        assert result.error ≡ ""
+                        const game.Match next ← result.values[0]
+                        var i8 expected ← kinds[choice]
+                        if sides[color] ≡ -1 { expected ← -expected }
+                        assert game.piece(next,target) ≡ expected
+                        assert next.moved[target] ≡ 1
+                        assert game.piece(next,source) ≡ 0
+                        assert next.moved[source] ≡ 0
+                        assert game.revision(next) ≡ 1
+                        const i32 nextSide ← -sides[color]
+                        assert game.side(next) ≡ nextSide
+                        assert game.lastFrom(next) ≡ source
+                        assert game.lastTo(next) ≡ target
+                        const i32 expectedPromotion ← choice
+                        assert game.lastPromotion(next) ≡ expectedPromotion
+                        for range 0‥4 const right { assert not game.right(next,right) }
+                        assert game.validate(game.encode(next)) ≡ "OK"
+                        assert game.encode(value) ≡ before
+                    }
+                }
+            }
+        }
+    }
+    test "missing invalid and extraneous choices retain every original field" {
+        const game.Match white ← boundary(1,1,false)
+        assertRejected(white,496,504,0,"PROMOTION_REQUIRED")
+        assertRejected(white,496,504,1,"INVALID_PROMOTION")
+        assertRejected(white,496,504,6,"INVALID_PROMOTION")
+        assertRejected(white,496,504,-2,"INVALID_PROMOTION")
+        const game.Match black ← boundary(-1,2,true)
+        assertRejected(black,64,1,0,"PROMOTION_REQUIRED")
+        assertRejected(black,64,1,6,"INVALID_PROMOTION")
+        var game.Match ordinary ← game.blank()
+        game.put(ordinary,4,1)
+        game.put(ordinary,508,-1)
+        game.put(ordinary,219,3)
+        assertRejected(ordinary,219,283,2,"INVALID_PROMOTION")
+    }
+    test "reaching only rank or only tier boundary retains a pawn for both colors" {
+        const list<i32> sources ← [240,408,200,88]
+        const list<i32> targets ← [248,472,192,24]
+        const list<i32> sides ← [1,1,-1,-1]
+        const list<i8> pieces ← [6,6,-6,-6]
+        for range 0‥4 const index {
+            var game.Match value ← game.blank()
+            game.put(value,4,1)
+            game.put(value,508,-1)
+            game.setSide(value,sides[index])
+            game.put(value,sources[index],pieces[index])
+            assertRejected(value,sources[index],targets[index],2,"INVALID_PROMOTION")
+            const rules.Outcome result ← rules.move(value,0,sources[index],targets[index],0)
+            assert result.error ≡ ""
+            assert game.piece(result.values[0],targets[index]) ≡ pieces[index]
+            assert game.lastPromotion(result.values[0]) ≡ 0
+            var bool found ← false
+            for from rules.moves(value,sources[index]) const option {
+                if option.to ≡ targets[index] {
+                    found ← true
+                    assert option.promotions.length() ≡ 0
+                }
+            }
+            assert found
+        }
+    }
+    test "promotion that opens own king line rejects every candidate choice" {
+        var game.Match value ← game.blank()
+        game.put(value,480,1)
+        game.put(value,508,-1)
+        game.put(value,496,6)
+        game.put(value,504,-3)
+        game.put(value,505,-4)
+        assert not rules.inCheck(value,1)
+        for range 2‥6 const choice { assertRejected(value,496,505,choice,"ILLEGAL_MOVE") }
+        for from rules.moves(value,496) const option { assert option.to ≢ 505 }
+    }
+    test "promoted kind is already present when the next side check is queried" {
+        const game.Match value ← boundary(1,1,false)
+        for range 2‥6 const choice {
+            const rules.Outcome result ← rules.move(value,0,496,504,choice)
+            assert result.error ≡ ""
+            if choice ≡ 2 or choice ≡ 3 {
+                assert rules.inCheck(result.values[0],-1)
+            } else {
+                assert not rules.inCheck(result.values[0],-1)
+            }
+        }
+    }
+}

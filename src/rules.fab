@@ -115,11 +115,11 @@ fn safe(game.Match candidate, i32 movingSide) → bool {
     return not inCheck(candidate,movingSide)
 }
 
-fn normalAllowed(game.Match value, i32 from, i32 to) → bool {
+fn normalAllowed(game.Match value, i32 from, i32 to, i32 promotion) → bool {
     const i8 target ← game.piece(value,to)
     if target ≡ 1 or target ≡ -1 { return false }
     if not geometry.previews(value.board,value.moved,from).contains(to) { return false }
-    const game.Match candidate ← construct(value,from,to,0,to,-1,-1)
+    const game.Match candidate ← construct(value,from,to,promotion,to,-1,-1)
     return safe(candidate,game.side(value))
 }
 
@@ -231,6 +231,7 @@ fn moves(game.Match value, i32 selected) → list<Move> {
     for from targets const to {
         var string kind ← "move"
         var bool admitted ← false
+        var list<i32> promotions ← empty
         if castleAllowed(value,selected,to) {
             kind ← "castle"
             admitted ← true
@@ -239,13 +240,18 @@ fn moves(game.Match value, i32 selected) → list<Move> {
                 kind ← "en-passant"
                 admitted ← true
             } else {
-                # Promotion is deliberately unavailable until its rule unit lands.
-                admitted ← not promotes(piece,to) and normalAllowed(value,selected,to)
+                if promotes(piece,to) {
+                    for range 2‥6 const choice {
+                        if normalAllowed(value,selected,to,choice) { promotions.append(choice) }
+                    }
+                    admitted ← promotions.length() > 0
+                } else {
+                    admitted ← normalAllowed(value,selected,to,0)
+                }
                 if game.piece(value,to) ≢ 0 { kind ← "capture" }
             }
         }
         if admitted {
-            const list<i32> promotions ← empty
             options.append(Move { to = to, kind = kind, promotions = promotions })
         }
     }
@@ -271,11 +277,14 @@ fn move(game.Match value, i32 expectedRevision, i32 from, i32 to, i32 promotion)
         if promotion ≢ 0 { return rejected("INVALID_PROMOTION") }
         return accepted(construct(value,from,to,0,game.epCaptured(value),-1,-1))
     }
-    if not normalAllowed(value,from,to) { return rejected("ILLEGAL_MOVE") }
     if promotes(piece,to) {
+        if not normalAllowed(value,from,to,2) { return rejected("ILLEGAL_MOVE") }
         if promotion ≡ 0 { return rejected("PROMOTION_REQUIRED") }
-        return rejected("INVALID_PROMOTION")
+        if promotion < 2 or promotion > 5 { return rejected("INVALID_PROMOTION") }
+        if not normalAllowed(value,from,to,promotion) { return rejected("ILLEGAL_MOVE") }
+        return accepted(construct(value,from,to,promotion,to,-1,-1))
     }
+    if not normalAllowed(value,from,to,0) { return rejected("ILLEGAL_MOVE") }
     if promotion ≢ 0 { return rejected("INVALID_PROMOTION") }
     return accepted(construct(value,from,to,0,to,-1,-1))
 }
