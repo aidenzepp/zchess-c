@@ -1,19 +1,175 @@
-# Milestone 1: arena geometry viewer delivery
+# Milestone 1: local arena geometry viewer
 
-Status: planned; compatibility and independent delivery audit pending.
-Goal: `docs/plans/zchess-rebuild.md` (planner READY for gated delivery).
-Repository for every unit: `/Users/sterling/Documents/dev/workspaces/personal/zchess`.
-Base: `aced8a5`; development branch `codex/faber-rebuild`.
+Status: READY for independent delivery audit; product HTTP/browser proof pending.
+Goal: `docs/plans/zchess-rebuild.md`; revision task `82446a20`.
+Every unit writes only `/Users/sterling/Documents/dev/workspaces/personal/zchess` on `codex/faber-rebuild`. Original C base: `aced8a5`; initial planning: `97f73de`.
 
-## Delivery outcome and baseline
+## Outcome and evidenced boundary
 
-Deliver a reliable local viewer whose arena, fixtures and movement previews are authored in English Faber 1.12.0. Compare sparse manipulable 3D against file/rank, file/tier and rank/tier slices. This is a geometry review tool; no actual chess moves, turns or full legality yet. Rule definitions and provisional status are in the goal and must not be widened.
+Deliver the approved geometry viewer: Faber-owned fixture positions and movement previews, sparse manipulable 3D, and all three orthogonal 2D slice planes. No match state, move application or full legal game exists in M1. Preserve the complete future rules and provisional decisions in the goal.
 
-Only C/raylib and PNGs exist at the base. The public example paths are currently unavailable; live docs disagree about browser package support. Therefore the first unit is compatibility diagnosis/admission, not assumed infrastructure. ENV-01 owns installation; no unit duplicates it. New file paths below are a proposed implementation layout, not claims about existing files.
+ENV-01 (`431c1006`) proves installed/checksummed 1.12.0 at `.tools/faber/1.12.0/bin/faber`, explicit `ti8[8,8,8]` creation/indexing, ranges and a tensor test. ENV-02 (`27e9f381`) proves pinned CLI stdout parsed by Node. Generated TS remains blocked (missing runtime, no emitted export); do not reproduce probes or pursue that route. Node HTTP and browser integration remain unproved product work.
 
-### Verified retirement inventory
+The revision's only new narrow probe is `.tools/probes/planner-abi/`: package manifest with name/version/edition, `[paths] source="src", entry="main.fab"`, `[build] kind="bin"`; `import from "./echo" echo`; sibling `@ public fn identity(i32 value) → i32`. It checks and runs with `--locale en`, with WARN003 on the imported function despite successful invocation. The executable entry is:
 
-The following read-only command was executed at the base:
+```faber
+@ cli "planner-abi"
+@ operand string fixture description "Fixture identifier"
+@ operand string selected description "Selected cell"
+main args args {
+    const i32 selected ← args.selected ↦ i32
+    print args.fixture
+    print echo.identity(selected)
+}
+```
+
+Executed commands (not product checks):
+
+```sh
+.tools/faber/1.12.0/bin/faber check --locale en .tools/probes/planner-abi
+.tools/faber/1.12.0/bin/faber run --locale en .tools/probes/planner-abi -- initial 227
+.tools/faber/1.12.0/bin/faber run --locale en .tools/probes/planner-abi -- initial -1
+```
+
+Check exits 0; runs print `initial` followed by `227` or `-1`, each on its own line. Package-level `locale="en"` was rejected as an unknown manifest field; `@ operand i32` was rejected SEM009. Use explicit `--locale en`, string operands and checked conversion. Input `nope` exits 1 on numeric conversion. This proves argv and sibling function imports, not arbitrary package APIs or the complete JSON serializer. `faber test --help` confirms `.proba` include filtering; no existing ENV test was rerun.
+
+## Exact process, HTTP and renderer contract
+
+Node uses `execFile` with the absolute pinned binary, fixed repository working directory, and argument array `['run','--locale','en',ROOT,'--',fixture,String(selected)]`. No shell, interpolated command, generated source or user-selected executable/path. A fresh invocation reconstructs the fixture and computes targets; it writes one complete JSON object to stdout after all validation. Diagnostics stay on stderr. No game state survives the request.
+
+Faber main uses the two string operands shown above. `fixture` is a known fixture ID; `selected` is decimal `-1` (nothing selected) or a cell ID 0–511. Faber validates both and rejects unknown fixtures/out-of-bounds selection. The host may validate syntax/range for transport but cannot construct boards or moves.
+
+HTTP endpoint: `GET /api/snapshot?fixture=initial&selected=-1`, both query keys required exactly once. Success HTTP 200 / `application/json`:
+
+```json
+{"ok":true,"snapshot":{"schemaVersion":1,"fixtureId":"initial","fixtures":["initial","rook-center","bishop-center","queen-center","knight-center","king-center","pawn-white","pawn-black","pawn-moved","blockers"],"selected":-1,"cells":[],"moved":[],"destinations":[]}}
+```
+
+The empty arrays above illustrate field names only. Every real success MUST contain exactly 512 integer `cells` and 512 binary `moved` values; `destinations` is a sorted unique list of IDs. Faber owns the fixture catalog returned in `fixtures`; no host fixture-position table is permitted. Cell identity is `file + 8*rank + 64*tier`, each component 0–7; tensor index is `[file,rank,tier]`, not assumed backing-store order. Board type is `ti8[8,8,8]`. Codes: 0 empty; abs(1 king, 2 queen, 3 rook, 4 bishop, 5 knight, 6 pawn); positive white, negative black. Separate moved metadata uses 0 unmoved / 1 moved. A selected empty cell is echoed with empty destinations. Unselected is always -1, never null.
+
+Faber semantic error: `{"ok":false,"error":{"code":"UNKNOWN_FIXTURE","message":"Unknown fixture"}}`; use `INVALID_SELECTION` for selection errors. Both are HTTP 400. Node returns the same envelope with transport codes: 400 `INVALID_REQUEST` (malformed/missing/duplicate query), 503 `BUSY` (concurrency limit), 504 `FABER_TIMEOUT`, 502 `FABER_FAILURE` or `INVALID_FABER_JSON`; error details do not become a fake empty snapshot. Nonzero child exit or malformed JSON can never be success. Limit child wall time to 10 seconds and stdout to 1 MiB; at most two child queries at once, no unbounded queue. Kill children on client disconnect/server shutdown. Bound loopback responses with no CORS opt-in; reject non-local Host/Origin for API requests.
+
+Browser keeps only requested fixture/selected identity plus camera, plane, fixed-axis index, hover and request generation. It renders detached responses. On fixture switch request selection -1. Discard late responses from older requests; pending/error states must not present old highlights as current. Camera/slice/view changes do not query or alter board rules. Both views implement `createView(container, onSelect) → {render(snapshot, presentation), resetCamera(), dispose()}`; 2D `resetCamera` is a no-op. Modules are plain `.mjs`, production modules never import tests. Renderers receive this contract, with test-only fabricated snapshots allowed.
+
+Faber fixtures: exact initial 48-piece C layout; each centered nonpawn piece; both pawn colors with forward lanes and enemy captures; moved pawn; friendly/enemy ray blockers. Full geometry definitions remain in the goal. No castling, en passant, promotion, king safety or actual moves in M1.
+
+## Unit graph
+
+```mermaid
+flowchart TD
+  STATE[STATE-01 arena + JSON] --> GEO[GEO-01 geometry]
+  STATE --> BRIDGE[BRIDGE-01 loopback transport]
+  BRIDGE --> SPACE[SPACE-01 sparse 3D]
+  FLAT[FLAT-01 slices] --> WIRE[WIRE-01 controls]
+  GEO --> WIRE
+  BRIDGE --> WIRE
+  SPACE --> WIRE
+  WIRE --> LOCAL[LOCAL-01 local delivery]
+  LOCAL --> GATE[Integration validation]
+  GATE --> VIEW[VIEW-01 browser witness]
+  VIEW --> AUDIT[Aggregate audit / Mind close]
+```
+
+Independent delivery audit precedes every dispatch. STATE-01 and FLAT-01 can start immediately after audit; GEO-01 and BRIDGE-01 can then run on disjoint files. Do not run shared Faber toolchains concurrently. All units are non-integrable alone until the M1 gate/witness; no new branch, push or merge is implied. Future checks below are unexecuted product requirements, not planning receipts.
+
+## Implementation units
+
+Each row has one definition. Scopes are exact repo-relative files. Read scope: repo, accepted receipts and cited language references. A Hand runs only its narrow sanity and reports executed cases; broad checks belong to the integration owner.
+
+### STATE-01 — Faber fixture snapshots
+
+- **outcome:** Pure fixture/selection queries emit the exact JSON envelope from actual Faber tensor state.
+- **write_scope:** `faber.toml`, `src/main.fab`, `src/arena.fab`, `src/geometry.fab`, `src/arena.proba`.
+- **depends_on:** none, after delivery audit and accepted ENV receipts.
+- **done_when:** Use the proven manifest/import/argv shape. Arena owns tensor, separate moved metadata, fixture catalog/layouts, input validation and JSON serialization; main only parses operands and calls it. Export `arena.snapshot(string fixture, i32 selected) → string` as the complete JSON envelope; `arena` imports `geometry`. Create `@ public fn previews(ti8[8,8,8] board, list<i8> moved, i32 selected) → list<i32>` in geometry as a typed empty stub, to be replaced only by GEO-01. Validate before printing; stdout contains no prompts/debug/partial JSON. Test explicit coordinate flattening, exact initial positions, invalid input, empty/unselected cases and deterministic repeated queries. No persistent state or public game action.
+- **sanity:** `.tools/faber/1.12.0/bin/faber test --locale en . --include arena`; require nonzero executed cases. One CLI stdout parsed with Node must satisfy the exact schema and initial occupancy; this is the unit boundary, not HTTP/browser proof.
+- **non_goals:** Movement implementation beyond typed stub, Node server, rendering, C deletion.
+- **risk:** medium: imported tensor/list API and full serializer exceed the minimal probe. Report exact unsupported mechanism instead of changing language or moving rules to JS.
+- **integrable:** no.
+
+### GEO-01 — Faber movement previews
+
+- **outcome:** All six occupancy-aware preview families replace the geometry stub.
+- **write_scope:** `src/geometry.fab`, `src/geometry.proba`.
+- **depends_on:** STATE-01.
+- **done_when:** Preserve `previews` signature and readonly input semantics. Enforce bounds, unique sorted IDs, no origin, correct blocker behavior; rook six rays, provisional bishop twelve plane rays/no body diagonals, queen union, all twenty-four knight jumps, king twenty-six neighbors, and both pawn colors/axes with moved-state and clear intermediate checks. Capture only occupied enemy file+rank OR file+tier cells. No combined rank+tier advance/capture or full legality.
+- **sanity:** `.tools/faber/1.12.0/bin/faber test --locale en . --include geometry`; require nonzero cases covering center/edge/corner, friendly/enemy blockers, jumping knights, pawn axes/colors/moved/empty captures, and input nonmutation. Mathematical witnesses must not simply copy the generation algorithm.
+- **non_goals:** Move execution, check, special moves, rule redesign.
+- **risk:** medium: missing direction families can look plausible visually.
+- **integrable:** no.
+
+### BRIDGE-01 — bounded loopback transport
+
+- **outcome:** Plain Node serves browser modules/local three.js and translates fixture queries to pinned Faber without state ownership.
+- **write_scope:** `scripts/serve.mjs`, `scripts/serve.test.mjs`, `package.json`, `package-lock.json`, `.gitignore`.
+- **depends_on:** STATE-01.
+- **done_when:** Implement the process/HTTP contract above; absolute fixed executable/root, no shell, bounded children, validated output/error envelopes, current-source invocation, disconnect/shutdown cleanup. Serve only `web/` and a fixed `/vendor/three/` mapping to installed three.js JS assets; normalize/contain paths, reject traversal and never expose repo/tools. Bind 127.0.0.1, use `PORT` or default 8787, refuse a busy requested port, print actual ready URL only after listening. Pin one three.js npm version and lock it; no framework, Vite, TypeScript, bundler or runtime shim. Establish `npm run dev` as this server entry; no mandatory build step. A startup compiler version/check failure prevents readiness.
+- **sanity:** `node --test scripts/serve.test.mjs`; use an ephemeral loopback test port and actual Faber for a valid query, bad query/fixture and schema checks; injected child seam only for timeout/failure/output-limit/disconnect tests. Verify static traversal rejection and port collision. Report cases and stop all test children.
+- **non_goals:** Persistent sessions, actions, arbitrary subprocess/API surface, authentication system, public listener, rendering or geometry.
+- **risk:** medium: process lifecycle, boundary errors and source-file exposure.
+- **integrable:** no.
+
+### FLAT-01 — orthogonal Canvas2D slices
+
+- **outcome:** Supplied snapshots draw and pick consistently in three slice planes.
+- **write_scope:** `web/slices.mjs`, `web/slices.test.mjs`.
+- **depends_on:** none, after delivery audit; uses the fixed contract above.
+- **done_when:** Implement the shared view interface for file/rank fixed tier, file/tier fixed rank, rank/tier fixed file. Show axis labels, readable pieces/colors, selected cell and supplied targets; off-slice selection remains explicit. Bijective 64-cell picking per slice with consistent axes, resize/device-pixel-ratio handling and disposal. Return cell IDs only; no candidate generation.
+- **sanity:** `node --test web/slices.test.mjs`; round-trip every visible cell for all planes/fixed-axis extremes and supplied selection/target projection. Importing the testable math must not require a browser DOM.
+- **non_goals:** Faber/server/fixture ownership, 3D, app controls or actual moves.
+- **risk:** medium: plausible axis-transposition errors.
+- **integrable:** no.
+
+### SPACE-01 — sparse 3D with pointer and keyboard controls
+
+- **outcome:** Thin three.js dots and camera-facing generated piece-label sprites render and pick supplied snapshots.
+- **write_scope:** `web/space.mjs`, `web/space.test.mjs`.
+- **depends_on:** BRIDGE-01 for pinned local three.js dependency/asset route.
+- **done_when:** Shared view interface; world file=X, tier=Y up, rank=Z depth, centered arena. Orbit/pan/zoom/reset by pointer; focused canvas supports arrows orbit, WASD pan, +/- zoom and R reset, with visible help and no keyboard interception in form controls. Pick exact piece/empty-dot IDs without drag-as-click, show selection/targets/axes, handle resize and dispose GPU/listener resources. Clear 3D initialization error. Import three.js via browser import map/local vendor route; no CDN/runtime fetch. Generated billboards avoid assuming PNG provenance.
+- **sanity:** `node --test web/space.test.mjs`; coordinate identity, picking identity, keyboard-to-camera intent and drag-vs-click logic. Keep testable logic importable under Node; full WebGL/browser proof belongs to VIEW-01.
+- **non_goals:** Rules, WebGPU/Triga, custom shaders, app controls or visual polish.
+- **risk:** medium: depth/occlusion, picking and focus errors.
+- **integrable:** no.
+
+### WIRE-01 — shared geometry-review workflow
+
+- **outcome:** Connect real HTTP snapshots to both renderers and visible review controls.
+- **write_scope:** `web/index.html`, `web/main.mjs`, `web/style.css`, `web/controller.mjs`, `web/controller.test.mjs`.
+- **depends_on:** GEO-01, BRIDGE-01, FLAT-01, SPACE-01.
+- **done_when:** Initial query fetches fixture catalog; fixture selector, view selector, plane/fixed-axis controls, camera reset, coordinate readout and supplied targets/count work. One click makes one query; fixture switch selects -1; late replies never restore an old selection. Loading/errors are visible and stale highlights are cleared. View/camera/slice changes preserve query identity without recomputing rules. Import map points bare `three` at the local vendor path. Visible geometry disclaimer, provisional bishop/setup labels and excluded pawn combination; no playable-game controls.
+- **sanity:** `node --test web/controller.test.mjs`; command/query forwarding, empty selection, fixture change, out-of-order responses, failure/loading and view changes without a board/rules mutation. Fake transport is test-only, never production fixture data.
+- **non_goals:** Legal moves, persistence, new rules, app redesign.
+- **risk:** medium: race/stale-state errors can falsely describe geometry.
+- **integrable:** no.
+
+### LOCAL-01 — reproducible local delivery and retirement
+
+- **outcome:** Document/finish the local launch boundary and retire the old C runtime at integration.
+- **write_scope:** `README.md`, `LICENSE`, `package.json`, `.gitignore`; delete only `Makefile`, `src/engine.c`, `src/engine.h`, `src/zchess.c`.
+- **depends_on:** WIRE-01.
+- **done_when:** README gives exact pinned compiler path/install prerequisite, Node/npm prerequisite, `npm ci` and `npm run dev`, loopback URL, controls including keyboard, local query architecture, fixtures and missing legal-game features. New authored code MIT; existing PNG provenance is excluded. Tools/node_modules remain ignored. Remove only the C inventory below, keeping history and optional sprites. No browser build/package ceremony or CI is introduced; future v1 CI remains in the goal.
+- **sanity:** Inspect exact retirement diff and README commands against server/package scripts. Broad package/query/browser checks belong to the owners below, not this Hand.
+- **non_goals:** Global install/PATH changes, PNG deletion, archive copy, public hosting, remote mutation.
+- **risk:** low: source retirement must not precede the working replacement's integration gate.
+- **integrable:** no until integrated validation and viewer witness pass.
+
+## Integration owner and separate VIEW-01 witness
+
+After seven units, Mind names one validation owner to run the broad hygiene once: `npm ci`; `.tools/faber/1.12.0/bin/faber format --check src`; `.tools/faber/1.12.0/bin/faber check --locale en .`; `.tools/faber/1.12.0/bin/faber test --locale en .`; `node --test scripts/serve.test.mjs web/slices.test.mjs web/space.test.mjs web/controller.test.mjs`. Installed format help confirms `--check` is read-only and defaults to English when no locale frontmatter/manifest pin exists; it has no `--locale` flag. Record exact commands, cases and results in `docs/evidence/m1-validation.md`; a zero-test pass is not proof. Check plain JS syntax as part of host tests, no unexplained new lint/build dependency. No compiler export/runtime build is required. Do not rerun accepted ENV probes or duplicate every unit sanity without a changed seam or named concern; the integration pass proves only the combined tree.
+
+VIEW-01 is a separately assigned read-only product witness after that gate; write only `docs/evidence/m1-viewer-acceptance.md`. Record commit/source, launch command, actual URL, browser/version and observed results:
+
+1. Follow README; open initial setup, identify A1S/E1S and A8Z/E8Z plus pawn tiers. Reload, stop/relaunch, confirm current source is queried and all processes stop cleanly.
+2. Select each isolated piece/pawn/moved/blocker fixture. Compare selected/target IDs to real HTTP JSON from Faber, not a host rules algorithm.
+3. Pointer orbit/pan/zoom/reset and piece/empty-dot picking; dragging must not select. Focus canvas and exercise arrows/WASD/+/-/R; controls must leave form typing alone.
+4. Carry one preview through all slice planes/fixed-axis extremes and view changes. Visible markers must be the projection of the same IDs; outside-slice status must be clear.
+5. Switch fixtures quickly, then select empty space; no late/stale highlights. Check labels/disclaimer, resize, a malformed request, an unknown fixture, busy port and a failed Faber request. Error states cannot masquerade as success.
+
+No exhaustive browser automation or repeated rules suite. A passing witness proves technical viewability, not operator settlement of provisional rules. Independent aggregate audit reviews the landed range/receipts before Mind closes M1. No push, merge or deploy is assigned here.
+
+## Retirement inventory and stop conditions
+
+This read-only baseline command was executed and must be rechecked before deleting anything:
 
 ```sh
 git ls-files '*.c' '*.h' Makefile
@@ -28,155 +184,4 @@ src/engine.h
 src/zchess.c
 ```
 
-Only RETIRE-01 may delete these exact files. Their replacement is atomic at integration: do not publish a half-built replacement. Retain the PNG assets; use generated text billboards initially. Do not archive C into a new folder.
-
-## Shared interfaces and invariants
-
-The admission unit proves the mechanism and records the exact pinned CLI flags/artifacts before other units start. It may refine emitted representation names, but must preserve this semantic contract:
-
-- Faber owns a `tensor<i32,[8,8,8]>` piece grid indexed by `[file,rank,tier]`, plus a separate 512-element moved-metadata list. Code 0 is empty; absolute codes 1 king, 2 queen, 3 rook, 4 bishop, 5 knight, 6 pawn; positive white, negative black.
-- Browser cell identity is `id = file + 8*rank + 64*tier`, 0–511. Flattening uses that explicit formula rather than assuming tensor backing-store order. Label conversions are presentation only.
-- Faber public operations, with spellings translated by a representation-only adapter if emitted names differ: `loadPosition(id: string)`, `selectCell(id: int)`, and `snapshot()`. Faber stores current fixture and selected cell; invalid external cell/fixture input returns an explicit error and leaves state unchanged.
-- Snapshot is a detached read model: `{fixtureId, cells: number[512], moved: boolean[512], selected: number|null, destinations: number[]}`. `destinations` are unique IDs from Faber. The host must not mutate the Faber grid, calculate candidate moves, mirror moved state, or infer rules from coordinates.
-- Each command produces a fresh snapshot; fixture load clears selection and destinations. Selecting an empty cell selects its coordinate with no destinations. The operator may inspect either color with no side-to-move restriction in M1.
-- Host owns camera, active view, slice plane/index and hover. It forwards one cell ID on click. View switches preserve the selected identity and preview set. A selected cell outside a slice remains visible in the coordinate readout with an off-slice notice.
-- Fixtures are Faber-authored: initial, rook-center, bishop-center, queen-center, knight-center, king-center, pawn-white, pawn-black, pawn-moved, and blockers. Pawn fixtures contain enemy capture witnesses and clear noncapture lanes. Blockers exercises friendly and enemy ray stopping. Positions are review examples, not legal-game positions.
-- Faber geometry uses only the agreed directions and occupancy semantics in the goal. King safety and special moves are absent; no move-application function is exposed.
-- New sources must remain regenerable from Faber. Never patch emitted TypeScript/JS or add rules to the host to rescue a failed target.
-
-```mermaid
-flowchart TD
-  ENV[ENV-01 install receipt] --> ADMIT[ADMIT-01 compatibility]
-  ADMIT --> STATE[STATE-01 arena and fixtures]
-  STATE --> GEO[GEO-01 preview geometry]
-  ADMIT --> FLAT[FLAT-01 2D slices]
-  ADMIT --> SPACE[SPACE-01 3D view]
-  GEO --> WIRE[WIRE-01 shared viewer controls]
-  FLAT --> WIRE
-  SPACE --> WIRE
-  WIRE --> RETIRE[RETIRE-01 local delivery / C retirement]
-  RETIRE --> GATE[Integration validation]
-  GATE --> WITNESS[VIEW-01 operator-viewable proof]
-  WITNESS --> AUDIT[Aggregate audit and Mind close]
-```
-
-ENV-01 is existing external work, not a new Hand. The downstream arrows are hard dependencies. FLAT-01 and SPACE-01 may run concurrently with Faber work after admission because their write surfaces are disjoint; they receive a fabricated snapshot solely in their tests, never as a production rules implementation. Serial shared state: only one unit at a time edits a given file or runs a Faber/native toolchain in this checkout.
-
-## Implementation units
-
-All write scopes are repository-relative within the root above. Unless stated otherwise, read scope is unrestricted within the repo and cited primary docs. No Hand owns a full package build or full suite. A sanity receipt must report the tests actually executed, not merely an exit status. Commands below are **future unexecuted contracts**; do not present them as passed planning checks.
-
-### ADMIT-01 — prove pinned tensor-to-browser compatibility
-
-- **outcome:** A narrow working package/build adapter establishes that Faber 1.12.0 can own tensor state and expose state changes to a real local browser.
-- **write_scope:** `faber.toml`, `src/main.fab`, `src/arena.fab`, `src/geometry.fab`, `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, `scripts/build-faber.mjs`, `web/index.html`, `web/src/faber-adapter.ts`, `web/src/contract.ts`, `web/src/admission.ts`, `docs/evidence/m1-compatibility.md`, `.gitignore`.
-- **depends_on:** ENV-01 installation receipt; independent delivery audit before dispatch.
-- **done_when:** Pin verified compiler launcher/version and host dependency versions/lock. Read local build/emit help rather than guessing browser-product flags. A minimal English tensor module with independent metadata and a public function checks, emits, bundles without generated edits, and a browser click changes a Faber cell from empty to a known piece and reads it back after another call. Prove coordinate sentinels for (1,2,3) and (3,2,1), separating tensor indexing from wire flattening. Exercise explicit invalid input and state preservation. Keep `geometry.fab` a typed empty-preview stub until GEO-01. Record actual commands, artifact paths, browser/version, observable output, external runtime provenance and any install requirement. Establish the shared contract and npm scripts named below; default rendering dependencies are three.js plus Vite/TypeScript, without UI framework, Triga or Tela.
-- **sanity:** One scoped admission probe plus one real browser interaction; this is the feature of the unit, not a full viewer proof. `npm run probe:compat` must exercise actual generated Faber and fail on a mismatch.
-- **non_goals:** Full initial setup, full geometry, polished viewer, installation duplication, compiler fixes, alternate Faber versions, native server rules fallback.
-- **risk:** high: docs do not prove pinned emission/export/runtime assembly. Report PASS only for the named tensor/export/browser mechanism. Report other errors verbatim as residuals. If that signal cannot run, report INCONCLUSIVE with the structural reason; if it fails, report the exact failed contract. Stop downstream dispatch on FAIL/INCONCLUSIVE.
-- **integrable:** no; scaffold remains on development branch until full M1 integration.
-
-### STATE-01 — arena authority and inspectable fixtures
-
-- **outcome:** Replace admission sample state with actual Faber arena, metadata, fixture loading, selection and detached snapshots.
-- **write_scope:** `src/arena.fab`, `src/main.fab`, `tests/arena.fab`.
-- **depends_on:** ADMIT-01.
-- **done_when:** Implement exact signed codes/coordinates/snapshot semantics above. Initial setup matches the 48-piece C table before retirement. Supply each named fixture and deterministic reset; selected cell is cleared on fixture switch, empty selection yields no targets, invalid inputs preserve state. Import the geometry stub for snapshot destinations; do not calculate rules here.
-- **sanity:** `npm run test:arena`, selecting this file only. Test initial piece/color positions, empty cells, coordinate sentinels, moved metadata, fixture reset, invalid input and snapshot isolation; record nonzero executed test cases. ADMIT-01 must establish the actual Faber test filter or dedicated harness behind this command.
-- **non_goals:** Movement logic, move execution, turn/history/persistence, rendering, direct grid mutation by host.
-- **risk:** medium: mutable tensor aliasing and flattening could break both views.
-- **integrable:** no.
-
-### GEO-01 — occupancy-aware preview geometry
-
-- **outcome:** Implement all six agreed geometry families in Faber against the existing state contract.
-- **write_scope:** `src/geometry.fab`, `tests/geometry.fab`.
-- **depends_on:** STATE-01.
-- **done_when:** The goal's directions, bounds, origin exclusion, occupancy stops and duplicate exclusion hold. The provisional bishop has no body diagonals; queen is exact rook/bishop union; knight jumps cover every signed permutation. Pawns distinguish color, moved/unmoved and each axis, require clear double-step intermediate, and capture only occupied enemy file+rank OR file+tier diagonals. No combined rank+tier advance/capture or full-check filtering. Input state is not mutated by previews.
-- **sanity:** `npm run test:geometry`, selecting this file only. Include center/edge/corner witnesses, friendly/enemy ray blocks, knights over blockers, both pawn colors/axes, moved pawn double-step exclusion and empty capture squares; record nonzero test cases. The test owns the mathematical sets, not a copy of the implementation algorithm.
-- **non_goals:** Castling, en passant, promotion, check, move execution, redefining provisional rules.
-- **risk:** medium: an attractive drawing can conceal incomplete direction sets.
-- **integrable:** no.
-
-### FLAT-01 — three orthogonal slice projections
-
-- **outcome:** A Canvas2D slice view draws a supplied shared snapshot and reports the exact clicked cell ID.
-- **write_scope:** `web/src/slices.ts`, `web/src/slices.test.ts`.
-- **depends_on:** ADMIT-01.
-- **done_when:** Support file/rank fixed tier, file/tier fixed rank, and rank/tier fixed file. Show axis labels, visible pieces, selected cell and supplied destinations; distinguish occupied targets/readable piece colors. Map all 64 visible cells bijectively to the chosen plane with consistent rank/tier orientation. Handle resize and device pixel ratio; do not generate moves. Return click identity via callback; expose render/dispose methods, no global state.
-- **sanity:** `npm run test:slices`, selecting this file only; round-trip projection/picking for every slice plane and fixed-axis extreme, plus selection/target inclusion from supplied IDs.
-- **non_goals:** Faber imports, fixture ownership, move execution, 3D, app controls.
-- **risk:** medium: axis transposition can produce plausible wrong highlights.
-- **integrable:** no.
-
-### SPACE-01 — sparse selectable 3D arena
-
-- **outcome:** A thin three.js view draws supplied cells as sparse dots and camera-facing piece-label billboards.
-- **write_scope:** `web/src/space.ts`, `web/src/space.test.ts`.
-- **depends_on:** ADMIT-01.
-- **done_when:** World axes are file X, rank depth Z, tier up Y, centered on arena midpoint. Orbit/pan/zoom/reset, selected/target markers and axes are readable. Pieces use generated text textures; ray picking returns exact cell IDs for piece sprites and empty dots without drag-as-click. Handle resize and dispose GPU/listener resources; show a clear initialization error if 3D cannot start. Render only the supplied snapshot and never compute rules.
-- **sanity:** `npm run test:space`, selecting this file only; coordinate/world round-trip, stable object-to-cell identity and drag/click classification. A minimal manual 3D sanity is allowed; full acceptance belongs to VIEW-01.
-- **non_goals:** WebGPU/Triga, custom shader system, PNG licensing assumptions, app/fixture controls.
-- **risk:** medium: overlapping depth and picking can make hidden-tier selection misleading.
-- **integrable:** no.
-
-### WIRE-01 — shared selection and geometry-review controls
-
-- **outcome:** Connect the two renderers to the real Faber snapshot with a usable viewer workflow.
-- **write_scope:** `web/src/main.ts`, `web/src/style.css`, `web/index.html`, `web/src/controller.ts`, `web/src/controller.test.ts`.
-- **depends_on:** GEO-01, FLAT-01, SPACE-01.
-- **done_when:** Replace the admission page entry with the viewer. Fixture selector, 3D/2D view choice, slice plane/index, selected coordinate, supplied target count/list and reset camera work. Every click calls Faber selection once then redraws from one snapshot. Fixture reset removes stale targets. Camera/view/slice changes preserve Faber arena and selection; outside-slice status is explicit. The geometry disclaimer is always visible; bishop/setup provisional status and excluded pawn combination are discoverable. Loading/build/runtime errors are visible; no blank success screen.
-- **sanity:** `npm run test:controller`, selecting this file only; verify command forwarding and snapshot redraw, empty selection, fixture reset, invalid input display, initialization failure and view changes without Faber mutation. Use a fake adapter only to test controller transport, never for production geometry.
-- **non_goals:** Legal-game controls, move application, undo/save/rules guide beyond the preview explanation, visual redesign.
-- **risk:** medium: stale highlights or fake data could disguise missing Faber integration.
-- **integrable:** no.
-
-### RETIRE-01 — local delivery boundary and C retirement
-
-- **outcome:** Make the new viewer reproducible and launchable locally, with the obsolete C runtime retired.
-- **write_scope:** `Makefile`, `src/engine.c`, `src/engine.h`, `src/zchess.c` (delete only); `README.md`, `LICENSE`, `scripts/dev.mjs`, `package.json`, `package-lock.json`, `.gitignore`.
-- **depends_on:** WIRE-01.
-- **done_when:** Delete exactly the verified retirement inventory. New authored code gets MIT terms with existing asset provenance excluded. README explains Faber 1.12.0 installation/pin, prerequisites, install/build/dev/check scripts, loopback URL, controls, fixture purpose, provisional geometry and missing legal-game features. `npm run dev` first builds current Faber, binds loopback, prints the actual ready URL, reports a busy port explicitly and shuts down children on Ctrl-C. Host dependencies are pinned/locked; generated outputs, local tools, node_modules and evidence screenshots are not staged as product sources. Changes to Faber require restarting dev or an explicit regeneration watch; never serve old output after a failed build.
-- **sanity:** Inspect the launcher contract and the retirement diff; the integration owner performs the broad launch/build gate once below. No CI or deployment is added in this unit.
-- **non_goals:** Global installer/PATH changes, packaging for other platforms, deleting optional PNGs, archiving old source, remote mutation.
-- **risk:** medium: a stale build or missing runtime asset would defeat reliable opening.
-- **integrable:** no until the aggregate integration gate and witness pass.
-
-## Integration / validation gate (separate ownership)
-
-Mind must name one integration validation owner after all seven implementation units; this is not additional Hand product work. Reconcile each durable commit and narrow receipt without rerunning the same proof. On the resulting tree that owner performs each broad check once and writes `docs/evidence/m1-validation.md`:
-
-| Future command | Required invariant |
-| --- | --- |
-| `npm ci` | Locked host toolchain installs without manifest drift. |
-| `npm run format:check` | Pinned Faber formatter reports no drift; host source format check also passes. |
-| `npm run check` | English Faber package and host TypeScript check, with the exact 1.12.0 launcher. |
-| `npm test` | All intended rule and host tests execute; report names/counts and reject a zero-test pass. |
-| `npm run build` | Clean generated Faber output is rebuilt and browser bundle includes it; no generated edits or stale source. |
-
-ADMIT-01 defines exact compiler commands behind these scripts from local CLI help and records them in its receipt. They are not claimed runnable in this initial planning tree. If the CLI cannot provide scoped test execution, ADMIT-01 must establish dedicated target packages/harnesses within its scope and update the proposed layout through Mind before dispatching downstream Hands; do not quietly run a full suite per Hand.
-
-Confirm no C/header/Makefile remains in tracked product files at integration, local tools are ignored, only allowed new authored code is under MIT, host modules contain no movement algorithm or authoritative arena mutation, and generated runtime dependencies are complete. Full legal-game CI is reserved for later v1; local milestone validation cannot be represented as that CI already existing.
-
-## VIEW-01 — separate viewer acceptance proof
-
-This witness is separately assigned after the integration gate, with no product edits. Write scope: `docs/evidence/m1-viewer-acceptance.md` only (screenshots may be temporary evidence linked by path). Depends on RETIRE-01 and passing integration validation. Risk medium; integrable yes as documentation after product admission. No exhaustive automation or repeated rules suite.
-
-Use the current build on loopback in an available real browser. Record commit, command/URL, browser/version, viewport, observed checks and failures. Run this bounded sequence:
-
-1. Start from documented instructions. Open initial setup and identify white A1S/E1S, black A8Z/E8Z and pawn tiers. Reload and confirm it starts coherently; stop/relaunch to prove the URL is reproducible.
-2. Load isolated rook/bishop/queen/knight/king fixtures and each pawn case. Select the piece; compare coordinate and destination IDs/counts to the Faber snapshot, not a second host rules algorithm.
-3. Rotate/pan/zoom/reset 3D; pick a piece and an empty dot, verify coordinate identity, and verify dragging does not trigger selection. Note any unreadable depth/occlusion problem.
-4. With a nonempty preview selected, switch through all three slice planes and both fixed-axis extremes. Confirm projected in-slice targets are the subset of the same Faber IDs, outside-slice status is clear, and selection survives view switches.
-5. Change fixture while a preview is selected; confirm no stale selection/targets. Inspect blocker and pawn-moved positions. Confirm provisional labels/disclaimer are visible and no control pretends to make a legal move.
-6. Exercise resize, an invalid fixture/cell through the adapter boundary, a startup/build failure, and busy-port behavior. The app/launcher must show an actionable error and preserve state or stop; no silent blank screen or stale build. Stop all processes started for the witness.
-
-Pass only when these observations support the goal's acceptance criteria. This is technical viewer acceptance, not operator settlement of bishop/pawn/layout rules. A failed observation becomes a precisely scoped repair; do not mark an unavailable browser check passed. Independent aggregate audit then reviews the final range/receipts before Mind closes M1 or presents it for operator geometry review.
-
-## Open questions and stops
-
-- No new product decision is needed before ADMIT-01. The exact pinned compiler emission/export/runtime and test-selection mechanisms remain the named technical unknowns.
-- If three.js assembly requires only presentation adaptation, record it in admission. If preserving tensor state requires altered generated code, language version change, hand-authored rules or a server architecture, stop and report to Mind.
-- Public examples remain inaccessible; do not silently use remembered workarounds as validated source. Later successful authenticated retrieval may inform the proof but cannot replace execution.
-- No push, merge, release, deployment or later-milestone work is assigned by this plan. No Hand task is created by the Planner.
+Every unit preserves state/rules in Faber and the fixed JSON/identity contract. Stop for a required language upgrade, JS board/movement implementation, persistent match/server design, generated-output patching or new rule decision. Full JSON/package integration failure gets its precise diagnostic routed to Mind; successful minimal imports do not promise every imported type works. Existing .tools/ENV evidence remains untouched. No product implementation or Hand task creation is performed by this planner revision.
