@@ -1,4 +1,130 @@
+fn inside(i32 file, i32 rank, i32 tier) → bool {
+    return file ≥ 0 and file ≺ 8 and rank ≥ 0 and rank ≺ 8 and tier ≥ 0 and tier ≺ 8
+}
+
+fn enemy(i8 piece, i8 target) → bool {
+    return piece ≻ 0 and target ≺ 0 or piece ≺ 0 and target ≻ 0
+}
+
+fn identity(i32 file, i32 rank, i32 tier) → i32 {
+    return file + 8 * rank + 64 * tier
+}
+
+fn ray(ti8[8, 8, 8] board, i8 piece, i32 file, i32 rank, i32 tier, i32 df, i32 dr, i32 dt) → list<i32> {
+    var list<i32> targets ← empty
+    var i32 f ← file + df
+    var i32 r ← rank + dr
+    var i32 t ← tier + dt
+    while inside(f, r, t) {
+        const i8 target ← board[[f, r, t]]
+        if target ≡ 0 or enemy(piece, target) {
+            targets.append(identity(f, r, t))
+        }
+        if target ≠ 0 {
+            break
+        }
+        f ← f + df
+        r ← r + dr
+        t ← t + dt
+    }
+    return targets
+}
+
 @ public
-fn previews(ti8[8,8,8] board, list<i8> moved, i32 selected) → list<i32> {
-    return empty
+fn previews(ti8[8, 8, 8] board, list<i8> moved, i32 selected) → list<i32> {
+    var list<i32> targets ← empty
+    if selected ≺ 0 or selected ≥ 512 or moved.length() ≠ 512 then return targets
+    const i32 file ← selected % 8
+    const i32 rank ← (selected / 8) % 8
+    const i32 tier ← selected / 64
+    const i8 piece ← board[[file, rank, tier]]
+    if piece ≡ 0 then return targets
+    var i32 kind ← piece ↦ i32
+    if kind ≺ 0 {
+        kind ← -kind
+    }
+    if kind ≡ 2 or kind ≡ 3 or kind ≡ 4 {
+        for range -1‥2 const df {
+            for range -1‥2 const dr {
+                for range -1‥2 const dt {
+                    var i32 axes ← 0
+                    if df ≠ 0 {
+                        axes ← axes + 1
+                    }
+                    if dr ≠ 0 {
+                        axes ← axes + 1
+                    }
+                    if dt ≠ 0 {
+                        axes ← axes + 1
+                    }
+                    const bool admitted ← kind ≡ 3 and axes ≡ 1 or kind ≡ 4 and axes ≡ 2 or kind ≡ 2 and (axes ≡ 1 or axes ≡ 2)
+                    if admitted {
+                        for from ray(board, piece, file, rank, tier, df, dr, dt) const target {
+                            targets.append(target)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if kind ≡ 1 or kind ≡ 5 {
+        for range -2‥3 const df {
+            for range -2‥3 const dr {
+                for range -2‥3 const dt {
+                    const i32 distance ← df * df + dr * dr + dt * dt
+                    const bool knight ← kind ≡ 5 and distance ≡ 5
+                    const bool king ← kind ≡ 1 and df ≥ -1 and df ≤ 1 and dr ≥ -1 and dr ≤ 1 and dt ≥ -1 and dt ≤ 1 and distance ≻ 0
+                    const i32 f ← file + df
+                    const i32 r ← rank + dr
+                    const i32 t ← tier + dt
+                    if (knight or king) and inside(f, r, t) {
+                        const i8 target ← board[[f, r, t]]
+                        if target ≡ 0 or enemy(piece, target) {
+                            targets.append(identity(f, r, t))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if kind ≡ 6 {
+        var i32 forward ← 1
+        if piece ≺ 0 {
+            forward ← -1
+        }
+        for range 0‥2 const axis {
+            var i32 dr ← 0
+            var i32 dt ← 0
+            if axis ≡ 0 {
+                dr ← forward
+            }
+            else {
+                dt ← forward
+            }
+            const i32 r ← rank + dr
+            const i32 t ← tier + dt
+            if inside(file, r, t) {
+                if board[[file, r, t]] ≡ 0 {
+                    targets.append(identity(file, r, t))
+                    const i32 r2 ← r + dr
+                    const i32 t2 ← t + dt
+                    if moved[selected] ≡ 0 and inside(file, r2, t2) {
+                        if board[[file, r2, t2]] ≡ 0 {
+                            targets.append(identity(file, r2, t2))
+                        }
+                    }
+                }
+            }
+            for range -1‥2 step 2 const df {
+                const i32 f ← file + df
+                if inside(f, r, t) {
+                    if enemy(piece, board[[f, r, t]]) {
+                        targets.append(identity(f, r, t))
+                    }
+                }
+            }
+        }
+    }
+    targets.sort()
+    return targets
 }
