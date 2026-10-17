@@ -1,0 +1,142 @@
+import from "./match" game
+import from "./attacks" threats
+
+fn single(i8 piece) → game.Match {
+    var game.Match value ← game.blank()
+    game.put(value,219,piece)
+    return value
+}
+
+fn count(game.Match value, i32 side) → i32 {
+    var i32 total ← 0
+    for range 0‥512 const cell {
+        if threats.attacked(value,cell,side) { total ← total + 1 }
+    }
+    return total
+}
+
+describe "attacks" {
+    test "white pawns threaten four empty capture cells and never pushes" {
+        const game.Match value ← single(6)
+        assert threats.attacked(value,226,1)
+        assert threats.attacked(value,228,1)
+        assert threats.attacked(value,282,1)
+        assert threats.attacked(value,284,1)
+        assert not threats.attacked(value,227,1)
+        assert not threats.attacked(value,283,1)
+        assert not threats.attacked(value,291,1)
+        assert not threats.attacked(value,290,1)
+        assert not threats.attacked(value,292,1)
+        assert not threats.attacked(value,210,1)
+        assert not threats.attacked(value,154,1)
+        assert not threats.attacked(value,226,-1)
+    }
+    test "black pawns reverse both axes and include defended endpoints" {
+        var game.Match value ← single(-6)
+        game.put(value,210,-5)
+        assert threats.attacked(value,210,-1)
+        assert threats.attacked(value,212,-1)
+        assert threats.attacked(value,154,-1)
+        assert threats.attacked(value,156,-1)
+        assert not threats.attacked(value,211,-1)
+        assert not threats.attacked(value,155,-1)
+        assert not threats.attacked(value,147,-1)
+        assert not threats.attacked(value,228,-1)
+    }
+    test "edge pawn captures cannot wrap file rank or tier" {
+        var game.Match value ← game.blank()
+        game.put(value,0,6)
+        assert threats.attacked(value,9,1)
+        assert threats.attacked(value,65,1)
+        assert not threats.attacked(value,7,1)
+        assert not threats.attacked(value,63,1)
+        game.put(value,0,0)
+        game.put(value,511,-6)
+        assert threats.attacked(value,502,-1)
+        assert threats.attacked(value,446,-1)
+        assert not threats.attacked(value,504,-1)
+        assert not threats.attacked(value,448,-1)
+    }
+    test "knights have all 24 perpendicular two one offsets for both colors" {
+        const game.Match white ← single(5)
+        const game.Match black ← single(-5)
+        assert count(white,1) ≡ 24
+        assert count(black,-1) ≡ 24
+        assert threats.attacked(white,209,1)
+        assert threats.attacked(white,229,1)
+        assert threats.attacked(white,90,1)
+        assert threats.attacked(white,348,1)
+        assert threats.attacked(white,83,1)
+        assert threats.attacked(white,355,1)
+        assert not threats.attacked(white,292,1)
+        assert not threats.attacked(white,221,1)
+    }
+    test "king threatens all 26 neighboring cells including friendly pieces" {
+        var game.Match value ← single(1)
+        assert count(value,1) ≡ 26
+        assert threats.attacked(value,146,1)
+        assert threats.attacked(value,292,1)
+        assert threats.attacked(value,283,1)
+        assert not threats.attacked(value,347,1)
+        game.put(value,220,6)
+        assert threats.attacked(value,220,1)
+        assert not threats.attacked(value,220,-1)
+    }
+    test "rook bishop queen use axis and plane rays but no body diagonals" {
+        const game.Match rook ← single(3)
+        const game.Match bishop ← single(4)
+        const game.Match queen ← single(-2)
+        assert count(rook,1) ≡ 21
+        assert count(bishop,1) ≡ 39
+        assert count(queen,-1) ≡ 60
+        assert threats.attacked(rook,475,1)
+        assert threats.attacked(rook,27,1)
+        assert threats.attacked(bishop,228,1)
+        assert threats.attacked(bishop,284,1)
+        assert threats.attacked(bishop,291,1)
+        assert not threats.attacked(bishop,283,1)
+        assert not threats.attacked(bishop,292,1)
+        assert threats.attacked(queen,291,-1)
+        assert threats.attacked(queen,283,-1)
+        assert not threats.attacked(queen,292,-1)
+    }
+    test "first occupied endpoint is defended or attacked and blocks everything beyond" {
+        var game.Match value ← single(3)
+        game.put(value,221,6)
+        game.put(value,223,-6)
+        game.put(value,217,-6)
+        assert threats.attacked(value,220,1)
+        assert threats.attacked(value,221,1)
+        assert not threats.attacked(value,222,1)
+        assert not threats.attacked(value,223,1)
+        assert threats.attacked(value,217,1)
+        assert not threats.attacked(value,216,1)
+        var game.Match diagonal ← single(4)
+        game.put(diagonal,292,6)
+        assert threats.attacked(diagonal,291,1)
+        game.put(diagonal,291,-3)
+        assert threats.attacked(diagonal,291,1)
+        assert not threats.attacked(diagonal,363,1)
+    }
+    test "pinned enemy still attacks cross tier and query never mutates state" {
+        var game.Match value ← game.blank()
+        game.put(value,4,1)
+        game.put(value,216,3)
+        game.put(value,219,-3)
+        game.put(value,223,-1)
+        const string before ← game.encode(value)
+        assert threats.attacked(value,283,-1)
+        assert threats.attacked(value,155,-1)
+        assert not threats.attacked(value,292,-1)
+        assert game.encode(value) ≡ before
+    }
+    test "invalid query inputs fail closed without indexing" {
+        const game.Match value ← game.initial()
+        const string before ← game.encode(value)
+        assert not threats.attacked(value,-1,1)
+        assert not threats.attacked(value,512,1)
+        assert not threats.attacked(value,0,0)
+        assert not threats.attacked(value,0,2)
+        assert game.encode(value) ≡ before
+    }
+}

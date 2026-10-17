@@ -1,0 +1,75 @@
+import from "./match" game
+
+fn inside(i32 file, i32 rank, i32 tier) → bool {
+    return file ≥ 0 and file < 8 and rank ≥ 0 and rank < 8 and tier ≥ 0 and tier < 8
+}
+
+fn sameKind(i8 piece, i32 side, i8 kind) → bool {
+    if side ≡ 1 { return piece ≡ kind }
+    const i8 negative ← -kind
+    return piece ≡ negative
+}
+
+# Threats include friendly occupied endpoints and pinned attackers. They do not
+# depend on whose turn it is or on whether the attacker can legally move.
+@ public
+fn attacked(game.Match value, i32 cell, i32 bySide) → bool {
+    if cell < 0 or cell > 511 or (bySide ≢ 1 and bySide ≢ -1) { return false }
+    const i32 file ← cell % 8
+    const i32 rank ← (cell / 8) % 8
+    const i32 tier ← cell / 64
+    for range -1‥2 step 2 const df {
+        if inside(file + df,rank - bySide,tier) {
+            if sameKind(value.board[[file + df,rank - bySide,tier]],bySide,6) { return true }
+        }
+        if inside(file + df,rank,tier - bySide) {
+            if sameKind(value.board[[file + df,rank,tier - bySide]],bySide,6) { return true }
+        }
+    }
+    for range -2‥3 const df {
+        for range -2‥3 const dr {
+            for range -2‥3 const dt {
+                const i32 distance ← df * df + dr * dr + dt * dt
+                const i32 f ← file + df
+                const i32 r ← rank + dr
+                const i32 t ← tier + dt
+                if inside(f,r,t) {
+                    if distance ≡ 5 {
+                        if sameKind(value.board[[f,r,t]],bySide,5) { return true }
+                    }
+                    if df ≥ -1 and df ≤ 1 and dr ≥ -1 and dr ≤ 1 and dt ≥ -1 and dt ≤ 1 and distance > 0 {
+                        if sameKind(value.board[[f,r,t]],bySide,1) { return true }
+                    }
+                }
+            }
+        }
+    }
+    for range -1‥2 const df {
+        for range -1‥2 const dr {
+            for range -1‥2 const dt {
+                var i32 axes ← 0
+                if df ≢ 0 { axes ← axes + 1 }
+                if dr ≢ 0 { axes ← axes + 1 }
+                if dt ≢ 0 { axes ← axes + 1 }
+                if axes ≡ 1 or axes ≡ 2 {
+                    var i32 f ← file + df
+                    var i32 r ← rank + dr
+                    var i32 t ← tier + dt
+                    while inside(f,r,t) {
+                        const i8 piece ← value.board[[f,r,t]]
+                        if piece ≢ 0 {
+                            if sameKind(piece,bySide,2) { return true }
+                            if axes ≡ 1 and sameKind(piece,bySide,3) { return true }
+                            if axes ≡ 2 and sameKind(piece,bySide,4) { return true }
+                            break
+                        }
+                        f ← f + df
+                        r ← r + dr
+                        t ← t + dt
+                    }
+                }
+            }
+        }
+    }
+    return false
+}
