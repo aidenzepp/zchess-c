@@ -1,6 +1,6 @@
 # Milestone 1: local arena geometry viewer
 
-Status: implementation units delivered locally; combined validation, browser witness, and aggregate acceptance pending.
+Status: delivered for operator geometry review; integrated checks and bounded real-browser witness recorded, aggregate audit and targeted repair review accepted. Pinned formatter limitation is tracked before CI; no playable-game acceptance claimed.
 Goal: `docs/plans/zchess-rebuild.md`; revision task `82446a20`.
 Every unit writes only `/Users/sterling/Documents/dev/workspaces/personal/zchess` on `codex/faber-rebuild`. Original C base: `aced8a5`; initial planning: `97f73de`.
 

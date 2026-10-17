@@ -1,6 +1,6 @@
 # zchess rebuild
 
-Status: milestone 1 implemented locally; combined validation, browser witness, and aggregate acceptance pending.
+Status: milestone 1 ready for operator geometry review; integrated checks, bounded real-browser witness, aggregate audit and strategic review recorded. Pinned formatter limitation remains documented; later milestones are not started.
 Owner: Mind. Planning records: Vivi tasks `04d56b20`, revision `82446a20`.
 Repository: `/Users/sterling/Documents/dev/workspaces/personal/zchess`.
 
