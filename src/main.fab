@@ -1,9 +1,8 @@
-import from "./arena" arena
+import from "./protocol" protocol
 
 @ cli { name = "zchess" }
-@ operand { type = string, binding = fixture, description = "Fixture identifier" }
-@ operand { type = string, binding = selected, description = "Selected cell, or -1" }
+@ operand { type = string, binding = fixture, description = "Fixture identifier or match" }
+@ operand { type = string, binding = selected, description = "Selected cell or match request" }
 main args args {
-    const i32 selected ← args.selected ↦ i32
-    print arena.snapshot(args.fixture, selected)
+    print protocol.dispatch(args.fixture, args.selected)
 }

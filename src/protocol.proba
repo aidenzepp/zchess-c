@@ -1,0 +1,149 @@
+import from "./protocol" protocol
+import from "./match" game
+import from "./rules" rules
+import from "./arena" arena
+
+fn assertError(string response, string code) → void {
+    assert response.contains("\"ok\":false")
+    assert response.contains("\"code\":\"" + code + "\"")
+    assert not response.contains("\"capsule\"")
+    assert not response.contains("\"snapshot\"")
+}
+
+fn focused() → game.Match {
+    var game.Match value ← game.blank()
+    game.put(value,4,1)
+    game.put(value,508,-1)
+    return value
+}
+
+describe "protocol" {
+    test "init and checked read preserve exact capsule and schema semantics" {
+        const game.Match value ← game.initial()
+        const string capsule ← game.encode(value)
+        const string init ← protocol.request("init")
+        assert init.contains("\"ok\":true")
+        assert init.contains("\"capsule\":\"" + capsule + "\"")
+        assert init.contains("\"schemaVersion\":2,\"mode\":\"match\",\"revision\":0,\"sideToMove\":1,\"inCheck\":false,\"result\":\"active\",\"selected\":-1")
+        assert init.contains("\"destinations\":[],\"moves\":[],\"lastMove\":null")
+        assert protocol.request("read~-1~" + capsule) ≡ init
+        const string selected ← protocol.request("read~72~" + capsule)
+        assert selected.contains("\"selected\":72")
+        assert selected.contains("\"destinations\":[80,88,136,200]")
+        assert selected.contains("{\"to\":80,\"kind\":\"move\",\"promotions\":[]}")
+        assert protocol.request("read~432~" + capsule).contains("\"selected\":432")
+        assert protocol.request("read~432~" + capsule).contains("\"destinations\":[],\"moves\":[]")
+        assert protocol.request("read~80~" + capsule).contains("\"selected\":80")
+    }
+    test "move and new update one revision and clear selection and new game metadata" {
+        const game.Match initial ← game.initial()
+        const string capsule ← game.encode(initial)
+        const string response ← protocol.request("move~0~72~80~0~" + capsule)
+        const rules.Outcome move ← rules.move(initial,0,72,80,0)
+        const game.Match next ← move.values[0]
+        assert response.contains("\"capsule\":\"" + game.encode(next) + "\"")
+        assert response.contains("\"revision\":1,\"sideToMove\":-1")
+        assert response.contains("\"selected\":-1")
+        assert response.contains("\"lastMove\":{\"from\":72,\"to\":80,\"promotion\":0}")
+        assert protocol.request("read~-1~" + game.encode(next)) ≡ response
+        const string reset ← protocol.request("new~1~" + game.encode(next))
+        var game.Match fresh ← game.initial()
+        game.setRevision(fresh,2)
+        assert reset.contains("\"capsule\":\"" + game.encode(fresh) + "\"")
+        assert reset.contains("\"revision\":2,\"sideToMove\":1")
+        assert reset.contains("\"lastMove\":null")
+    }
+    test "wrong shapes malformed scalars and invalid selections reject without state" {
+        const string capsule ← game.encode(game.initial())
+        assertError(protocol.request(""),"INVALID_REQUEST")
+        assertError(protocol.request("unknown"),"INVALID_REQUEST")
+        assertError(protocol.request("init~extra"),"INVALID_REQUEST")
+        assertError(protocol.request("read~-1"),"INVALID_REQUEST")
+        assertError(protocol.request("read~-1~" + capsule + "~extra"),"INVALID_REQUEST")
+        assertError(protocol.request("move~0~72~80~0"),"INVALID_REQUEST")
+        assertError(protocol.request("new~0"),"INVALID_REQUEST")
+        assertError(protocol.request("read~512~" + capsule),"INVALID_SELECTION")
+        assertError(protocol.request("read~-2~" + capsule),"INVALID_SELECTION")
+        assertError(protocol.request("read~01~" + capsule),"INVALID_SELECTION")
+        assertError(protocol.request("read~bad~" + capsule),"INVALID_SELECTION")
+        assertError(protocol.request("move~0~72~512~0~" + capsule),"INVALID_REQUEST")
+        assertError(protocol.request("move~0~72~80~bad~" + capsule),"INVALID_REQUEST")
+        assertError(protocol.request("new~01~" + capsule),"INVALID_REQUEST")
+        var string huge ← capsule
+        for range 0‥4 const index { huge ← huge + huge }
+        assertError(protocol.request(huge),"INVALID_REQUEST")
+    }
+    test "corruption never becomes an empty board or reset" {
+        assertError(protocol.request("read~-1~bad"),"INVALID_STATE")
+        assertError(protocol.request("new~0~bad"),"INVALID_STATE")
+        assertError(protocol.request("move~0~72~80~0~bad"),"INVALID_STATE")
+        const string kingless ← game.encode(game.blank())
+        assertError(protocol.request("read~-1~" + kingless),"INVALID_STATE")
+        const string wrongVersion ← game.encode(game.initial()).replace("ZC1","ZC2")
+        assertError(protocol.request("read~-1~" + wrongVersion),"INVALID_STATE")
+    }
+    test "rule failures expose fixed errors and no partial success payload" {
+        const string capsule ← game.encode(game.initial())
+        assertError(protocol.request("move~1~72~80~0~" + capsule),"STALE_REVISION")
+        assertError(protocol.request("new~1~" + capsule),"STALE_REVISION")
+        assertError(protocol.request("move~0~432~424~0~" + capsule),"NOT_YOUR_TURN")
+        assert protocol.request("move~0~72~72~0~" + capsule) ≡ "{\"ok\":false,\"error\":{\"code\":\"ILLEGAL_MOVE\",\"message\":\"Move is not legal\"}}"
+        assertError(protocol.request("move~0~72~80~2~" + capsule),"INVALID_PROMOTION")
+    }
+    test "promotion descriptors precede atomic choice and checked next-side status" {
+        var game.Match value ← focused()
+        game.put(value,496,6)
+        const string capsule ← game.encode(value)
+        const string read ← protocol.request("read~496~" + capsule)
+        assert read.contains("\"destinations\":[504]")
+        assert read.contains("\"moves\":[{\"to\":504,\"kind\":\"move\",\"promotions\":[2,3,4,5]}]")
+        assertError(protocol.request("move~0~496~504~0~" + capsule),"PROMOTION_REQUIRED")
+        assertError(protocol.request("move~0~496~504~6~" + capsule),"INVALID_PROMOTION")
+        const string promoted ← protocol.request("move~0~496~504~2~" + capsule)
+        assert promoted.contains("\"ok\":true")
+        assert promoted.contains("\"sideToMove\":-1,\"inCheck\":true")
+        assert promoted.contains("\"lastMove\":{\"from\":496,\"to\":504,\"promotion\":2}")
+    }
+    test "special descriptors use exact kind names without JavaScript inference" {
+        var game.Match value ← focused()
+        game.put(value,7,3)
+        value.meta[3] ← 1
+        assert protocol.snapshot(value,4).contains("{\"to\":6,\"kind\":\"castle\",\"promotions\":[]}")
+        var game.Match ep ← focused()
+        game.put(ep,210,6)
+        game.put(ep,211,-6)
+        ep.moved[211] ← 1
+        game.setEnPassant(ep,219,211,1)
+        game.setLastMove(ep,227,211,0)
+        game.setRevision(ep,1)
+        assert protocol.request("read~210~" + game.encode(ep)).contains("{\"to\":219,\"kind\":\"en-passant\",\"promotions\":[]}")
+    }
+    test "terminal matches are readable New game is allowed and revision ceiling never resets" {
+        var game.Match value ← game.blank()
+        game.put(value,0,-1)
+        game.put(value,146,1)
+        game.put(value,73,2)
+        game.put(value,56,3)
+        game.setSide(value,-1)
+        game.setResult(value,1)
+        const string capsule ← game.encode(value)
+        const string read ← protocol.request("read~0~" + capsule)
+        assert read.contains("\"inCheck\":true,\"result\":\"white-wins\"")
+        assert read.contains("\"destinations\":[],\"moves\":[]")
+        assertError(protocol.request("move~0~0~1~0~" + capsule),"GAME_OVER")
+        assert protocol.request("new~0~" + capsule).contains("\"revision\":1,\"sideToMove\":1")
+        game.setRevision(value,1000000)
+        const string ceiling ← game.encode(value)
+        assert protocol.request("read~-1~" + ceiling).contains("\"revision\":1000000")
+        assertError(protocol.request("new~1000000~" + ceiling),"REVISION_EXHAUSTED")
+        game.setResult(value,0)
+        assertError(protocol.request("move~1000000~0~1~0~" + game.encode(value)),"REVISION_EXHAUSTED")
+    }
+    test "legacy two-operand fixture queries preserve their original geometry envelope" {
+        assert protocol.dispatch("initial","-1") ≡ arena.snapshot("initial",-1)
+        assert protocol.dispatch("rook-center","219") ≡ arena.snapshot("rook-center",219)
+        assert protocol.dispatch("initial","bad") ≡ arena.snapshot("initial",-2)
+        assert protocol.dispatch("unknown","bad") ≡ arena.snapshot("unknown",-1)
+        assert protocol.dispatch("match","init") ≡ protocol.request("init")
+    }
+}

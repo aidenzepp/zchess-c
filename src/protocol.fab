@@ -1,0 +1,125 @@
+import from "./arena" arena
+import from "./match" game
+import from "./rules" rules
+
+fn failure(string code) → string {
+    var string message ← "Invalid request"
+    if code ≡ "INVALID_STATE" { message ← "Match state is invalid" }
+    if code ≡ "INVALID_SELECTION" { message ← "Invalid selection" }
+    if code ≡ "STALE_REVISION" { message ← "Match revision is stale" }
+    if code ≡ "NOT_YOUR_TURN" { message ← "Piece does not belong to the side to move" }
+    if code ≡ "ILLEGAL_MOVE" { message ← "Move is not legal" }
+    if code ≡ "PROMOTION_REQUIRED" { message ← "Choose a promotion piece" }
+    if code ≡ "INVALID_PROMOTION" { message ← "Invalid promotion choice" }
+    if code ≡ "GAME_OVER" { message ← "Game is over" }
+    if code ≡ "REVISION_EXHAUSTED" { message ← "Match revision limit reached" }
+    return "{\"ok\":false,\"error\":{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}}"
+}
+
+fn boolean(bool value) → string {
+    if value { return "true" }
+    return "false"
+}
+
+fn integers(list<i32> values) → string {
+    var string text ← "["
+    for range 0‥values.length() const index {
+        if index > 0 { text ← text + "," }
+        text ← text + "§"(values[index])
+    }
+    return text + "]"
+}
+
+fn cells(game.Match value, bool moved) → string {
+    var string text ← "["
+    for range 0‥512 const id {
+        if id > 0 { text ← text + "," }
+        if moved { text ← text + "§"(value.moved[id]) } else { text ← text + "§"(game.piece(value,id)) }
+    }
+    return text + "]"
+}
+
+@ public
+fn snapshot(game.Match value, i32 selected) → string {
+    const list<rules.Move> options ← rules.moves(value,selected)
+    var list<i32> destinations ← empty
+    var string moves ← "["
+    for range 0‥options.length() const index {
+        const rules.Move option ← options[index]
+        destinations.append(option.to)
+        if index > 0 { moves ← moves + "," }
+        moves ← moves + "{\"to\":" + "§"(option.to) + ",\"kind\":\"" + option.kind + "\",\"promotions\":" + integers(option.promotions) + "}"
+    }
+    moves ← moves + "]"
+    const list<string> results ← ["active","white-wins","black-wins","stalemate"]
+    return "{\"schemaVersion\":2,\"mode\":\"match\",\"revision\":" + "§"(game.revision(value)) + ",\"sideToMove\":" + "§"(game.side(value)) + ",\"inCheck\":" + boolean(rules.inCheck(value,game.side(value))) + ",\"result\":\"" + results[game.result(value)] + "\",\"selected\":" + "§"(selected) + ",\"cells\":" + cells(value,false) + ",\"moved\":" + cells(value,true) + ",\"destinations\":" + integers(destinations) + ",\"moves\":" + moves + ",\"lastMove\":" + game.lastMoveJson(value) + "}"
+}
+
+fn success(game.Match value, i32 selected) → string {
+    return "{\"ok\":true,\"capsule\":\"" + game.encode(value) + "\",\"snapshot\":" + snapshot(value,selected) + "}"
+}
+
+fn scalar(string token, i32 minimum, i32 maximum) → list<i32> {
+    const list<i32> parsed ← game.parseInteger(token)
+    var list<i32> values ← empty
+    if parsed.length() ≡ 1 {
+        if parsed[0] ≥ minimum and parsed[0] ≤ maximum { values.append(parsed[0]) }
+    }
+    return values
+}
+
+@ public
+fn request(string request) → string {
+    if request.length() > 16512 { return failure("INVALID_REQUEST") }
+    const list<string> parts ← request.split("~")
+    if parts.length() < 1 { return failure("INVALID_REQUEST") }
+    const string operation ← parts[0]
+    if operation ≡ "init" {
+        if parts.length() ≢ 1 { return failure("INVALID_REQUEST") }
+        return success(game.initial(),-1)
+    }
+    if operation ≡ "read" {
+        if parts.length() ≢ 3 { return failure("INVALID_REQUEST") }
+        const list<i32> selected ← scalar(parts[1],-1,511)
+        if selected.length() ≢ 1 { return failure("INVALID_SELECTION") }
+        const list<game.Match> opened ← game.open(parts[2])
+        if opened.length() ≢ 1 { return failure("INVALID_STATE") }
+        return success(opened[0],selected[0])
+    }
+    if operation ≡ "move" {
+        if parts.length() ≢ 6 { return failure("INVALID_REQUEST") }
+        const list<i32> revision ← scalar(parts[1],0,1000000)
+        const list<i32> from ← scalar(parts[2],0,511)
+        const list<i32> to ← scalar(parts[3],0,511)
+        const list<i32> promotion ← game.parseInteger(parts[4])
+        if revision.length() ≢ 1 or from.length() ≢ 1 or to.length() ≢ 1 or promotion.length() ≢ 1 { return failure("INVALID_REQUEST") }
+        const list<game.Match> opened ← game.open(parts[5])
+        if opened.length() ≢ 1 { return failure("INVALID_STATE") }
+        const rules.Outcome outcome ← rules.move(opened[0],revision[0],from[0],to[0],promotion[0])
+        if outcome.error ≢ "" { return failure(outcome.error) }
+        return success(outcome.values[0],-1)
+    }
+    if operation ≡ "new" {
+        if parts.length() ≢ 3 { return failure("INVALID_REQUEST") }
+        const list<i32> revision ← scalar(parts[1],0,1000000)
+        if revision.length() ≢ 1 { return failure("INVALID_REQUEST") }
+        const list<game.Match> opened ← game.open(parts[2])
+        if opened.length() ≢ 1 { return failure("INVALID_STATE") }
+        const game.Match current ← opened[0]
+        if revision[0] ≢ game.revision(current) { return failure("STALE_REVISION") }
+        if not game.canIncrement(current) { return failure("REVISION_EXHAUSTED") }
+        var game.Match next ← game.initial()
+        game.setRevision(next,game.revision(current) + 1)
+        return success(next,-1)
+    }
+    return failure("INVALID_REQUEST")
+}
+
+@ public
+fn dispatch(string operation, string argument) → string {
+    if operation ≡ "match" { return request(argument) }
+    if not arena.known(operation) { return arena.snapshot(operation,-1) }
+    const list<i32> selected ← scalar(argument,-1,511)
+    if selected.length() ≢ 1 { return arena.snapshot(operation,-2) }
+    return arena.snapshot(operation,selected[0])
+}
