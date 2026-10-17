@@ -1,6 +1,6 @@
 # zchess rebuild
 
-Status: approved direction; milestone 1 ready for delivery through the evidenced local Faber CLI bridge; viewer acceptance pending.
+Status: milestone 1 implemented locally; combined validation, browser witness, and aggregate acceptance pending.
 Owner: Mind. Planning records: Vivi tasks `04d56b20`, revision `82446a20`.
 Repository: `/Users/sterling/Documents/dev/workspaces/personal/zchess`.
 
