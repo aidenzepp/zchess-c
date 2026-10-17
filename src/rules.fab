@@ -1,0 +1,160 @@
+import from "./match" game
+import from "./geometry" geometry
+import from "./attacks" threats
+
+@ public
+class Move {
+    var i32 to
+    var string kind
+    var list<i32> promotions
+}
+
+@ public
+class Outcome {
+    var string error
+    var list<game.Match> values
+}
+
+fn rejected(string code) → Outcome {
+    const list<game.Match> values ← empty
+    return Outcome { error = code, values = values }
+}
+
+fn accepted(game.Match value) → Outcome {
+    return Outcome { error = "", values = [value] }
+}
+
+@ public
+fn kingCell(game.Match value, i32 side) → i32 {
+    for range 0‥512 const id {
+        const i8 piece ← game.piece(value,id)
+        if side ≡ 1 and piece ≡ 1 { return id }
+        if side ≡ -1 and piece ≡ -1 { return id }
+    }
+    return -1
+}
+
+@ public
+fn inCheck(game.Match value, i32 side) → bool {
+    const i32 king ← kingCell(value,side)
+    if king < 0 { return true }
+    return threats.attacked(value,king,-side)
+}
+
+@ public
+fn promotes(i8 piece, i32 to) → bool {
+    if piece ≡ 6 { return (to / 8) % 8 ≡ 7 and to / 64 ≡ 7 }
+    if piece ≡ -6 { return (to / 8) % 8 ≡ 0 and to / 64 ≡ 0 }
+    return false
+}
+
+fn clearEntitlements(game.Match value, i8 piece, i32 cell) → void {
+    if piece ≡ 1 {
+        game.clearRight(value,0)
+        game.clearRight(value,1)
+    }
+    if piece ≡ -1 {
+        game.clearRight(value,2)
+        game.clearRight(value,3)
+    }
+    if piece ≡ 3 and cell ≡ 0 { game.clearRight(value,0) }
+    if piece ≡ 3 and cell ≡ 7 { game.clearRight(value,1) }
+    if piece ≡ -3 and cell ≡ 504 { game.clearRight(value,2) }
+    if piece ≡ -3 and cell ≡ 511 { game.clearRight(value,3) }
+}
+
+# This effect primitive is internal to rule validation. Special rules supply
+# their captured/rook cells, then use the same complete candidate safety query.
+@ public
+fn construct(game.Match value, i32 from, i32 to, i32 promotion, i32 captured, i32 rookFrom, i32 rookTo) → game.Match {
+    var game.Match candidate ← game.copy(value)
+    const i8 piece ← game.piece(value,from)
+    clearEntitlements(candidate,piece,from)
+    if captured ≥ 0 {
+        clearEntitlements(candidate,game.piece(value,captured),captured)
+        game.put(candidate,captured,0)
+        candidate.moved[captured] ← 0
+    }
+    game.put(candidate,from,0)
+    candidate.moved[from] ← 0
+    var i8 placed ← piece
+    const list<i8> kinds ← [0,0,2,3,4,5]
+    if promotion ≥ 2 and promotion ≤ 5 {
+        placed ← kinds[promotion]
+        if piece < 0 { placed ← -placed }
+    }
+    game.put(candidate,to,placed)
+    candidate.moved[to] ← 1
+    if rookFrom ≥ 0 {
+        const i8 rook ← game.piece(value,rookFrom)
+        game.put(candidate,rookFrom,0)
+        candidate.moved[rookFrom] ← 0
+        game.put(candidate,rookTo,rook)
+        candidate.moved[rookTo] ← 1
+    }
+    game.clearEnPassant(candidate)
+    if piece ≡ 6 or piece ≡ -6 {
+        const i32 difference ← to - from
+        if difference ≡ 16 or difference ≡ -16 {
+            const i32 target ← from + game.side(value) * 8
+            game.setEnPassant(candidate,target,to,1)
+        }
+        if difference ≡ 128 or difference ≡ -128 {
+            const i32 target ← from + game.side(value) * 64
+            game.setEnPassant(candidate,target,to,2)
+        }
+    }
+    game.setLastMove(candidate,from,to,promotion)
+    game.setSide(candidate,-game.side(value))
+    game.setRevision(candidate,game.revision(value) + 1)
+    return candidate
+}
+
+@ public
+fn safe(game.Match candidate, i32 movingSide) → bool {
+    return not inCheck(candidate,movingSide)
+}
+
+fn normalAllowed(game.Match value, i32 from, i32 to) → bool {
+    const i8 target ← game.piece(value,to)
+    if target ≡ 1 or target ≡ -1 { return false }
+    if not geometry.previews(value.board,value.moved,from).contains(to) { return false }
+    const game.Match candidate ← construct(value,from,to,0,to,-1,-1)
+    return safe(candidate,game.side(value))
+}
+
+@ public
+fn moves(game.Match value, i32 selected) → list<Move> {
+    var list<Move> options ← empty
+    if selected < 0 or selected > 511 or game.result(value) ≢ 0 { return options }
+    const i8 piece ← game.piece(value,selected)
+    if game.color(piece) ≢ game.side(value) { return options }
+    for from geometry.previews(value.board,value.moved,selected) const to {
+        # Promotion is deliberately unavailable until its rule unit lands.
+        if not promotes(piece,to) and normalAllowed(value,selected,to) {
+            var string kind ← "move"
+            if game.piece(value,to) ≢ 0 { kind ← "capture" }
+            const list<i32> promotions ← empty
+            options.append(Move { to = to, kind = kind, promotions = promotions })
+        }
+    }
+    return options
+}
+
+@ public
+fn move(game.Match value, i32 expectedRevision, i32 from, i32 to, i32 promotion) → Outcome {
+    if expectedRevision ≢ game.revision(value) { return rejected("STALE_REVISION") }
+    if game.result(value) ≢ 0 { return rejected("GAME_OVER") }
+    if not game.canIncrement(value) { return rejected("REVISION_EXHAUSTED") }
+    if from < 0 or from > 511 or to < 0 or to > 511 { return rejected("INVALID_REQUEST") }
+    const i8 piece ← game.piece(value,from)
+    if piece ≡ 0 { return rejected("ILLEGAL_MOVE") }
+    if game.color(piece) ≢ game.side(value) { return rejected("NOT_YOUR_TURN") }
+    if not normalAllowed(value,from,to) { return rejected("ILLEGAL_MOVE") }
+    if promotes(piece,to) {
+        if promotion ≡ 0 { return rejected("PROMOTION_REQUIRED") }
+        return rejected("INVALID_PROMOTION")
+    }
+    if promotion ≢ 0 { return rejected("INVALID_PROMOTION") }
+    return accepted(construct(value,from,to,0,to,-1,-1))
+}

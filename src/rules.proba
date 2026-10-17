@@ -1,0 +1,201 @@
+import from "./match" game
+import from "./rules" rules
+
+fn focused() → game.Match {
+    var game.Match value ← game.blank()
+    game.put(value,4,1)
+    game.put(value,508,-1)
+    return value
+}
+
+fn has(game.Match value, i32 from, i32 to) → bool {
+    for from rules.moves(value,from) const option {
+        if option.to ≡ to { return true }
+    }
+    return false
+}
+
+fn unchangedFailure(game.Match value, i32 revision, i32 from, i32 to, i32 promotion, string error) → void {
+    const string before ← game.encode(value)
+    const rules.Outcome outcome ← rules.move(value,revision,from,to,promotion)
+    assert outcome.error ≡ error
+    assert outcome.values.length() ≡ 0
+    assert game.encode(value) ≡ before
+}
+
+describe "rules" {
+    test "initial ordinary pawn move commits once and preserves source" {
+        const game.Match value ← game.initial()
+        const string before ← game.encode(value)
+        const rules.Outcome outcome ← rules.move(value,0,72,80,0)
+        assert outcome.error ≡ ""
+        assert outcome.values.length() ≡ 1
+        const game.Match next ← outcome.values[0]
+        assert game.piece(next,72) ≡ 0
+        assert next.moved[72] ≡ 0
+        assert game.piece(next,80) ≡ 6
+        assert next.moved[80] ≡ 1
+        assert game.side(next) ≡ -1
+        assert game.revision(next) ≡ 1
+        assert game.lastFrom(next) ≡ 72
+        assert game.lastTo(next) ≡ 80
+        assert game.lastPromotion(next) ≡ 0
+        assert game.validate(game.encode(next)) ≡ "OK"
+        assert game.encode(value) ≡ before
+    }
+    test "ordinary capture clears captured piece flag and transfers mover" {
+        var game.Match value ← focused()
+        game.put(value,219,3)
+        game.put(value,221,-4)
+        value.moved[221] ← 1
+        const rules.Outcome outcome ← rules.move(value,0,219,221,0)
+        assert outcome.error ≡ ""
+        const game.Match next ← outcome.values[0]
+        assert game.piece(next,219) ≡ 0
+        assert next.moved[219] ≡ 0
+        assert game.piece(next,221) ≡ 3
+        assert next.moved[221] ≡ 1
+        assert game.validate(game.encode(next)) ≡ "OK"
+        assert game.piece(value,221) ≡ -4
+    }
+    test "wrong turn blocked paths empty origins and king capture reject unchanged" {
+        var game.Match value ← focused()
+        game.put(value,219,3)
+        game.put(value,220,6)
+        game.put(value,221,-4)
+        unchangedFailure(value,0,221,222,0,"NOT_YOUR_TURN")
+        unchangedFailure(value,0,219,221,0,"ILLEGAL_MOVE")
+        unchangedFailure(value,0,80,88,0,"ILLEGAL_MOVE")
+        unchangedFailure(value,0,219,220,0,"ILLEGAL_MOVE")
+        unchangedFailure(value,1,219,283,0,"STALE_REVISION")
+        unchangedFailure(value,0,-1,0,0,"INVALID_REQUEST")
+        game.put(value,219,0)
+        game.put(value,444,3)
+        unchangedFailure(value,0,444,508,0,"ILLEGAL_MOVE")
+    }
+    test "pinned rook cannot expose king but may keep blocking the same ray" {
+        var game.Match value ← game.blank()
+        game.put(value,216,1)
+        game.put(value,219,3)
+        game.put(value,223,-3)
+        game.put(value,508,-1)
+        assert not rules.inCheck(value,1)
+        unchangedFailure(value,0,219,283,0,"ILLEGAL_MOVE")
+        assert not has(value,219,283)
+        const rules.Outcome outcome ← rules.move(value,0,219,220,0)
+        assert outcome.error ≡ ""
+        assert not rules.inCheck(outcome.values[0],1)
+    }
+    test "checked king requires a real evasion and permits cross tier interposition" {
+        var game.Match value ← game.blank()
+        game.put(value,219,1)
+        game.put(value,223,-3)
+        game.put(value,508,-1)
+        game.put(value,283,4)
+        assert rules.inCheck(value,1)
+        unchangedFailure(value,0,283,274,0,"ILLEGAL_MOVE")
+        const rules.Outcome outcome ← rules.move(value,0,283,220,0)
+        assert outcome.error ≡ ""
+        assert not rules.inCheck(outcome.values[0],1)
+    }
+    test "king cannot step into pawn threats or adjacent enemy king" {
+        var game.Match value ← game.blank()
+        game.put(value,219,1)
+        game.put(value,221,-1)
+        unchangedFailure(value,0,219,220,0,"ILLEGAL_MOVE")
+        game.put(value,221,0)
+        game.put(value,508,-1)
+        game.put(value,293,-6)
+        unchangedFailure(value,0,219,228,0,"ILLEGAL_MOVE")
+    }
+    test "king and corner rook moves and corner rook capture clear irreversible rights" {
+        var game.Match value ← focused()
+        game.put(value,0,3)
+        game.put(value,7,3)
+        game.put(value,504,-3)
+        game.put(value,511,-3)
+        for range 2‥6 const index { value.meta[index] ← 1 }
+        const rules.Outcome kingMove ← rules.move(value,0,4,12,0)
+        assert kingMove.error ≡ ""
+        assert not game.right(kingMove.values[0],0)
+        assert not game.right(kingMove.values[0],1)
+        assert game.right(kingMove.values[0],2)
+        const rules.Outcome rookMove ← rules.move(value,0,0,8,0)
+        assert rookMove.error ≡ ""
+        assert not game.right(rookMove.values[0],0)
+        assert game.right(rookMove.values[0],1)
+        game.put(value,496,3)
+        const rules.Outcome capture ← rules.move(value,0,496,504,0)
+        assert capture.error ≡ ""
+        assert not game.right(capture.values[0],2)
+        assert game.right(capture.values[0],3)
+        assert game.validate(game.encode(capture.values[0])) ≡ "OK"
+    }
+    test "pawn doubles set same-axis entitlement for both colors and axes" {
+        const list<i32> sides ← [1,-1]
+        const list<i32> offsets ← [8,64]
+        for range 0‥2 const color {
+            for range 0‥2 const axis {
+                var game.Match value ← focused()
+                game.setSide(value,sides[color])
+                if sides[color] ≡ 1 { game.put(value,219,6) } else { game.put(value,219,-6) }
+                const i32 target ← 219 + sides[color] * offsets[axis]
+                const i32 to ← target + sides[color] * offsets[axis]
+                const rules.Outcome outcome ← rules.move(value,0,219,to,0)
+                assert outcome.error ≡ ""
+                const game.Match next ← outcome.values[0]
+                assert game.epTarget(next) ≡ target
+                assert game.epCaptured(next) ≡ to
+                const i32 expectedAxis ← axis + 1
+                assert game.epAxis(next) ≡ expectedAxis
+                assert game.validate(game.encode(next)) ≡ "OK"
+            }
+        }
+    }
+    test "pawn doubles require clear middle unmoved pawn and never combine axes" {
+        var game.Match value ← focused()
+        game.put(value,219,6)
+        game.put(value,227,3)
+        unchangedFailure(value,0,219,235,0,"ILLEGAL_MOVE")
+        game.put(value,227,0)
+        value.moved[219] ← 1
+        unchangedFailure(value,0,219,235,0,"ILLEGAL_MOVE")
+        unchangedFailure(value,0,219,347,0,"ILLEGAL_MOVE")
+        unchangedFailure(value,0,219,291,0,"ILLEGAL_MOVE")
+    }
+    test "only committed moves expire en passant while reads and rejection retain it" {
+        var game.Match value ← focused()
+        game.put(value,219,6)
+        const rules.Outcome first ← rules.move(value,0,219,235,0)
+        const game.Match afterDouble ← first.values[0]
+        const string before ← game.encode(afterDouble)
+        unchangedFailure(afterDouble,1,508,508,0,"ILLEGAL_MOVE")
+        const list<rules.Move> options ← rules.moves(afterDouble,508)
+        assert options.length() > 0
+        assert game.encode(afterDouble) ≡ before
+        const rules.Outcome reply ← rules.move(afterDouble,1,508,500,0)
+        assert reply.error ≡ ""
+        assert game.epTarget(reply.values[0]) ≡ -1
+        assert game.epCaptured(reply.values[0]) ≡ -1
+        assert game.epAxis(reply.values[0]) ≡ -1
+    }
+    test "promotion boundary and extraneous choices never leave intermediate pawn state" {
+        var game.Match value ← focused()
+        game.put(value,496,6)
+        unchangedFailure(value,0,496,504,0,"PROMOTION_REQUIRED")
+        unchangedFailure(value,0,496,504,2,"INVALID_PROMOTION")
+        unchangedFailure(value,0,496,504,6,"INVALID_PROMOTION")
+        assert not has(value,496,504)
+        game.put(value,219,3)
+        unchangedFailure(value,0,219,283,2,"INVALID_PROMOTION")
+    }
+    test "terminal and exhausted matches reject mutation before piece intent" {
+        var game.Match value ← focused()
+        game.setResult(value,3)
+        unchangedFailure(value,0,0,0,0,"GAME_OVER")
+        assert rules.moves(value,4).length() ≡ 0
+        game.setResult(value,0)
+        game.setRevision(value,1000000)
+        unchangedFailure(value,1000000,0,0,0,"REVISION_EXHAUSTED")
+    }
+}
