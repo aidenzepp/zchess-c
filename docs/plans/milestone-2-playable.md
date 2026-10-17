@@ -1,12 +1,12 @@
 # Milestone 2: playable local zchess
 
-Status: proposed for operator approval; planning only. No milestone 2 implementation is authorized by this document.
+Status: operator approved this plan and its three outstanding details on 2026-10-17. Continuous implementation through a playable local browser is authorized; first dispatch is the isolated state admission unit in `milestone-2-delivery.md`. Downstream implementation remains gated on that receipt.
 
 ## Outcome and boundaries
 
 Two people share one browser screen and play from the 48-piece starting position, with Faber enforcing turns, legal moves, special moves, check, checkmate and stalemate. Keep the existing 3D arena, three orthogonal slice views, PNG/text toggle, selection and camera controls. The geometry sandbox remains separately available for inspecting isolated fixtures; those fixtures cannot replace an active match.
 
-This is a local development milestone, not the public v1 release. AI/search, bit arenas, online play, hosting, phone packaging, undo, move history, save/resume and CI remain outside it. Propose a **New game** control and a last-move readout for practical play; neither is a history system. No C restoration, compiler upgrade, dependency addition or generated TypeScript runtime revival.
+This is a local development milestone, not the public v1 release. AI/search, bit arenas, online play, hosting, phone packaging, undo, move history, save/resume and CI remain outside it. Include a **New game** control and a last-move readout for practical play; neither is a history system. No C restoration, compiler upgrade, dependency addition or generated TypeScript runtime revival.
 
 ## Settled rules
 
@@ -18,7 +18,7 @@ The operator's latest decisions resolve the three former geometry questions: ret
 - Initial major pieces: white A1S–H1S and black A8Z–H8Z, both R,N,B,Q,K,B,N,R. Pawns: white A1T–H1T and A2T–H2T; black A7Y–H7Y and A8Y–H8Y. Total 48.
 - Prior plan records ordinary file-axis castling on the starting rank/tier, immediate en passant after a double on either pawn axis, and promotion to Q/R/B/N only at the opponent's back rank **and** opponent's starting tier. Thus white promotes at rank 8/tier Z, black at rank 1/tier S; arriving at only one boundary does not promote. Ordinary king-safety, checkmate and stalemate semantics apply.
 
-## Details proposed for approval
+## Approved implementation details
 
 1. **En passant follows the doubled axis.** After a rank double, only a rank-forward pawn capture into the skipped cell qualifies; after a tier double, only a tier-forward capture qualifies. The other coordinate must match that plane. This excludes a perpendicular-axis interception into the skipped cell, which the earlier agreement did not explicitly settle. Store both the skipped target and the pawn's actual destination; remove the pawn from that destination before checking king safety. The right expires after the opponent's next completed move, including a different double step; invalid attempts and selection do not consume it.
 2. **Castling keeps its familiar file displacement.** King E→G with rook H→F, or king E→C with rook A→D, on rank 1/tier S for white or rank 8/tier Z for black. Require the original eligible king and rook, neither previously moved, all intervening cells empty, and no check on the king's start, transit or destination. Other tiers provide attack lines, not new castle paths. Moving back, capturing a rook or promoting a replacement never restores rights.
@@ -26,7 +26,7 @@ The operator's latest decisions resolve the three former geometry questions: ret
 4. **Milestone 2 ends games by checkmate or stalemate only.** Repetition, move-count draws and insufficient-material adjudication need a separate 3D rules decision; do not inherit 2D tables or silently call them implemented. State this limit in the rules notes and UI. No clocks or resignation flow in this milestone.
 5. **One shared, memory-only match per local server.** Browser refresh reconnects to that match. New game intentionally replaces it; stopping/restarting the server loses it. Multiple tabs address the same match, with stale actions rejected. This is not save/resume or network multiplayer.
 
-Approval should explicitly accept or revise the axis restriction in item 1 and the limited draw policy in item 4; the remaining items are implementation proposals, not claims of previous approval.
+The operator explicitly approved same-axis en passant, deferring other draw rules, and the memory-only shared match. Approval covers the plan above, including New game and the last-move readout. No further rule question blocks admission; unsupported compiler mechanisms still require an evidence-led transport revision.
 
 ## Current baseline
 
@@ -47,7 +47,7 @@ flowchart LR
 
 **Faber owns all match meaning.** A match contains the board tensor, moved metadata, side to move, irreversible castling rights, optional en-passant target/captured-cell/axis, revision, result and last move. Faber initializes and validates it, generates legal move descriptors and emits detached display data. The browser owns presentation and action intent only.
 
-**Persist between CLI calls through an opaque state capsule.** Propose bounded, versioned text encoded/decoded only by Faber and retained unchanged in host memory. Each shell-free invocation receives the capsule and a `new`, `read`/selection or `move(from,to,promotion?)` command as string operands. The host never accepts a browser-supplied capsule or edits chess fields. Admit decoding and full-arena argv size first. If that fails, revise this seam before downstream work; no JS rules fallback, compiler upgrade or TypeScript runtime revival.
+**Persist between CLI calls through an opaque state capsule.** Use bounded, versioned text encoded/decoded only by Faber and retained unchanged in host memory. Each shell-free invocation receives the capsule and a `new`, `read`/selection or `move(from,to,promotion?)` command as string operands. The host never accepts a browser-supplied capsule or edits chess fields. Admit decoding and full-arena argv size first. If that fails, revise this seam before downstream work; no JS rules fallback, compiler upgrade or TypeScript runtime revival.
 
 **Make actions atomic.** Serialize match requests; require expected revision, bounded bodies/queue, time/output limits and local Host/Origin checks. Commit a capsule only after a complete valid Faber success response; failure preserves the last good state. A disconnected browser must not cancel a dispatched mutation; reconnect reads its result. Never auto-retry moves. Reject stale actions and refresh. Faber advances revision across New game; a host process/session token also rejects requests from before server restart. Geometry queries cannot mutate the match.
 
@@ -57,14 +57,14 @@ After each complete move, evaluate the opponent's check and legal replies: no re
 
 ## Delivery milestones and first tasks
 
-These are proposed work boundaries, not dispatched implementation tasks. A later delivery pass assigns exact write scopes after approval.
+These are approved outcome boundaries. `milestone-2-delivery.md` lowers admission first; later delivery passes assign exact scopes using its receipt.
 
 | Milestone | Work and first useful result | Exit condition |
 | --- | --- | --- |
 | **A. Admit state round trips** | First task: in an isolated ignored probe, prove pinned 1.12.0 can represent match fields, independently rebuild a candidate, encode/decode the bounded capsule and survive successive CLI calls. Include malformed-state rejection. Then define the match protocol and fixture/match separation. | Fresh initial state → move intent → next invocation preserves every field; rejected input preserves prior state; no host rules or compiler/dependency change. Failure routes a transport revision before downstream work. |
 | **B. Legal ordinary play** | Add match initialization and atomic normal moves, capture and moved flags. Add attack queries and king-safety filtering before exposing executable moves in the browser. | Both colors alternate; pinned moves, adjacent kings, king captures and exposed checks are rejected. Full 48-piece start works; geometry tests remain intact. |
 | **C. Special moves and results** | Add axis-specific en passant, irreversible file-axis castling, atomic promotion, then check/checkmate/stalemate over the complete legal move set. Use legal-position test fixtures distinct from the geometry sandbox. | Both colors and both pawn axes covered; all special-move side effects are included in safety checks and terminal detection. Draw-policy limitation is explicit. |
-| **D. Connect the playable browser** | Add serialized match transport and controller actions against the approved protocol; integrate legal selection → destination → optional promotion choice. Display turn, check/result, last move, rejection and pending/error state; propose New game and separate Geometry sandbox mode. | Two people can play and capture through either renderer, recover from stale/failing actions, refresh the same live match and restart deliberately. Presentation changes do not change rules or revision. |
+| **D. Connect the playable browser** | Add serialized match transport and controller actions against the approved protocol; integrate legal selection → destination → optional promotion choice. Display turn, check/result, last move, rejection and pending/error state; include New game and separate Geometry sandbox mode. | Two people can play and capture through either renderer, recover from stale/failing actions, refresh the same live match and restart deliberately. Presentation changes do not change rules or revision. |
 | **E. Verify and review** | Run focused rules/protocol/controller checks, package hygiene and one bounded real-browser witness; update README/rules notes and record evidence. | Operator can view and play the current build; evidence states observed passes and unverified limits. Stop for operator review before milestone 3. |
 
 Protocol work can precede browser shell work after A; shared Faber modules and host mutations stay serialized. Do not expose B's normal moves as a complete playable milestone before C's legality and result coverage is integrated.
@@ -77,8 +77,8 @@ Protocol work can precede browser shell work after A; shared Faber modules and h
 - **Integrated checks:** pinned package check and Faber test runner, existing Node tests plus new match tests, and changed-file hygiene. Measure executed tests. Retain the documented isolated formatter SEM010 limitation rather than upgrading to conceal it; CI remains milestone 3.
 - **Separate browser witness:** record browser, commit and live server. Observe two-color turns/captures, rejection, check/result display, promotion, deliberate New game, geometry separation and moves through both renderers with sprite/text and camera preserved. Rare-rule proof primarily comes from deterministic Faber fixtures. Do not claim a complete game or unavailable browser checks were witnessed.
 
-## Approval gate and readiness
+## Approval and readiness
 
-**Goal-check verdict: NOT READY for full playable-game delivery; ready for operator review of this proposal.** The product direction is grounded in the current viewer and latest rule decisions. Approval must settle the proposed en-passant axis restriction, limited draw policy and memory-only shared-match behavior. State-capsule decoding and candidate independence are explicitly unproved admission work, not a reason to switch languages. After approval, lower A first and gate dependent implementation on its receipt. Return to the operator for any material new rule, ownership, runtime or persistence change.
+**Goal-check verdict: READY for gated admission delivery.** The operator approved the outstanding rules and ephemeral match posture. State-capsule decoding and candidate independence remain unproved; A is the explicit investigation boundary, not permission to start its dependents. After its accepted receipt, lower the supported protocol and remaining implementation units. Return to the operator only for a material rule, ownership, runtime or persistence change. No push, deploy or milestone 3 work is authorized.
 
-References: `docs/plans/zchess-rebuild.md`; `docs/plans/milestone-1-delivery.md`; `docs/evidence/m1-validation.md`; `docs/evidence/sprite-toggle.md`; the source/test paths in the baseline table. The vault's `Objects/People/Aiden Benedict Zepp.md` describes zchess as an experimental systems project; it supplies context, not current rules.
+References: `docs/plans/zchess-rebuild.md`; `docs/plans/milestone-1-delivery.md`; `docs/evidence/m1-validation.md`; `docs/evidence/sprite-toggle.md`; the source/test paths in the baseline section. The vault's `Objects/People/Aiden Benedict Zepp.md` describes zchess as an experimental systems project; it supplies context, not current rules.
