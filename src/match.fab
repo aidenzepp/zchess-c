@@ -1,0 +1,324 @@
+@ public
+class Match {
+    var ti8[8,8,8] board
+    var list<i8> moved
+    var list<i32> meta
+}
+
+@ public
+fn blank() → Match {
+    const ti8[] tensor ← empty
+    var list<i8> moved ← empty
+    for range 0‥512 const id { moved.append(0) }
+    return Match { board = tensor.create(0, [8,8,8]), moved = moved, meta = [1,0,0,0,0,0,-1,-1,-1,0,-1,-1,0] }
+}
+
+@ public
+fn piece(Match value, i32 id) → i8 {
+    return value.board[[id % 8,(id / 8) % 8,id / 64]]
+}
+
+@ public
+fn put(Match value, i32 id, i8 code) → void {
+    value.board[[id % 8,(id / 8) % 8,id / 64]] ← code
+}
+
+@ public
+fn copy(Match value) → Match {
+    var Match candidate ← blank()
+    for range 0‥512 const id {
+        put(candidate, id, piece(value,id))
+        candidate.moved[id] ← value.moved[id]
+    }
+    for range 0‥13 const id { candidate.meta[id] ← value.meta[id] }
+    return candidate
+}
+
+@ public
+fn initial() → Match {
+    var Match value ← blank()
+    for range 2‥6 const index { value.meta[index] ← 1 }
+    {
+        const list<i8> back ← [3,5,4,2,1,4,5,3]
+        for range 0‥8 const file {
+            put(value,file,back[file])
+            put(value,504 + file,-back[file])
+            put(value,64 + file,6)
+            put(value,72 + file,6)
+            put(value,432 + file,-6)
+            put(value,440 + file,-6)
+        }
+    }
+    return value
+}
+
+@ public
+fn encode(Match value) → string {
+    var string result ← "ZC1|"
+    for range 0‥512 const id {
+        if id > 0 { result ← result + "," }
+        result ← result + "§"(piece(value,id))
+    }
+    result ← result + "|"
+    for range 0‥512 const id {
+        if id > 0 { result ← result + "," }
+        result ← result + "§"(value.moved[id])
+    }
+    result ← result + "|"
+    for range 0‥13 const id {
+        if id > 0 { result ← result + "," }
+        result ← result + "§"(value.meta[id])
+    }
+    return result
+}
+
+# Canonical token recognition precedes bounded decimal arithmetic.
+fn integer(string token) → bool {
+    if token.length() < 1 or token.length() > 7 { return false }
+    if token ≡ "0" { return true }
+    var int start ← 0
+    if token.slice(0,1) ≡ "-" { start ← 1 }
+    if token.length() ≤ start { return false }
+    if token.slice(start,start + 1) ≡ "0" { return false }
+    const list<string> digits ← ["0","1","2","3","4","5","6","7","8","9"]
+    var string remaining ← token
+    for range 0‥10 const index { remaining ← remaining.replace(digits[index], "") }
+    remaining ← remaining.replace("-", "")
+    if remaining ≢ "" { return false }
+    for range start‥token.length() const index {
+        if not digits.contains(token.slice(index,index + 1)) { return false }
+    }
+    return true
+}
+
+# Total bounded decimal decoder: no fallible string conversion is used.
+fn number(string token) → i32 {
+    if not integer(token) { return -999 }
+    const list<string> digits ← ["0","1","2","3","4","5","6","7","8","9"]
+    const list<i32> values ← [0,1,2,3,4,5,6,7,8,9]
+    var i32 result ← 0
+    var int start ← 0
+    if token.slice(0,1) ≡ "-" { start ← 1 }
+    for range start‥token.length() const index {
+        var i32 digit ← -1
+        for range 0‥10 const d {
+            if token.slice(index,index + 1) ≡ digits[d] { digit ← values[d] }
+        }
+        if digit < 0 { return -999 }
+        result ← result * 10 + digit
+    }
+    if start ≡ 1 { result ← -result }
+    if "§"(result) ≢ token { return -999 }
+    return result
+}
+
+fn code(string token) → i8 {
+    const list<string> labels ← ["-6","-5","-4","-3","-2","-1","0","1","2","3","4","5","6"]
+    const list<i8> values ← [-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6]
+    for range 0‥13 const index { if labels[index] ≡ token { return values[index] } }
+    return 0
+}
+
+fn structure(string capsule) → string {
+    if capsule.length() > 16384 { return "TOO_LARGE" }
+    const list<string> fields ← capsule.split("|")
+    if fields.length() ≢ 4 { return "FIELD_COUNT" }
+    if fields[0] ≢ "ZC1" { return "VERSION" }
+    const list<string> cells ← fields[1].split(",")
+    const list<string> flags ← fields[2].split(",")
+    const list<string> metadata ← fields[3].split(",")
+    if cells.length() ≢ 512 or flags.length() ≢ 512 or metadata.length() ≢ 13 { return "ARRAY_LENGTH" }
+    for range 0‥512 const id {
+        if not integer(cells[id]) { return "INTEGER" }
+        const i32 code ← number(cells[id])
+        if "§"(code) ≢ cells[id] { return "INTEGER" }
+        if code < -6 or code > 6 { return "PIECE" }
+        if flags[id] ≢ "0" and flags[id] ≢ "1" { return "FLAG" }
+    }
+    var list<i32> meta ← empty
+    for range 0‥13 const id {
+        if not integer(metadata[id]) { return "INTEGER" }
+        const i32 scalar ← number(metadata[id])
+        if "§"(scalar) ≢ metadata[id] { return "INTEGER" }
+        meta.append(scalar)
+    }
+    if meta[0] ≢ -1 and meta[0] ≢ 1 { return "SIDE" }
+    if meta[1] < 0 or meta[1] > 1000000 { return "REVISION" }
+    for range 2‥6 const id { if meta[id] < 0 or meta[id] > 1 { return "CASTLING" } }
+    if meta[6] ≡ -1 {
+        if meta[7] ≢ -1 or meta[8] ≢ -1 { return "EN_PASSANT" }
+    } else {
+        if meta[6] < 0 or meta[6] > 511 or meta[7] < 0 or meta[7] > 511 { return "EN_PASSANT" }
+        if meta[6] ≡ meta[7] { return "EN_PASSANT" }
+        if meta[8] ≢ 1 and meta[8] ≢ 2 { return "EN_PASSANT" }
+    }
+    if meta[9] < 0 or meta[9] > 3 { return "RESULT" }
+    if meta[10] ≡ -1 {
+        if meta[11] ≢ -1 or meta[12] ≢ 0 { return "LAST_MOVE" }
+    } else {
+        if meta[10] < 0 or meta[10] > 511 or meta[11] < 0 or meta[11] > 511 { return "LAST_MOVE" }
+        if meta[10] ≡ meta[11] { return "LAST_MOVE" }
+        if meta[12] ≢ 0 and (meta[12] < 2 or meta[12] > 5) { return "LAST_MOVE" }
+    }
+    return "OK"
+}
+
+fn reconstruct(string capsule) → Match {
+    const list<string> fields ← capsule.split("|")
+    const list<string> cells ← fields[1].split(",")
+    const list<string> flags ← fields[2].split(",")
+    const list<string> metadata ← fields[3].split(",")
+    var Match value ← blank()
+    for range 0‥512 const id {
+        put(value,id,code(cells[id]))
+        if flags[id] ≡ "1" { value.moved[id] ← 1 } else { value.moved[id] ← 0 }
+    }
+    for range 0‥13 const id { value.meta[id] ← number(metadata[id]) }
+    return value
+}
+
+@ public
+fn side(Match value) → i32 { return value.meta[0] }
+@ public
+fn revision(Match value) → i32 { return value.meta[1] }
+@ public
+fn right(Match value, i32 index) → bool { return value.meta[2 + index] ≡ 1 }
+@ public
+fn epTarget(Match value) → i32 { return value.meta[6] }
+@ public
+fn epCaptured(Match value) → i32 { return value.meta[7] }
+@ public
+fn epAxis(Match value) → i32 { return value.meta[8] }
+@ public
+fn result(Match value) → i32 { return value.meta[9] }
+@ public
+fn lastFrom(Match value) → i32 { return value.meta[10] }
+@ public
+fn lastTo(Match value) → i32 { return value.meta[11] }
+@ public
+fn lastPromotion(Match value) → i32 { return value.meta[12] }
+@ public
+fn setSide(Match value, i32 side) → void {
+    var Match targetValue ← value
+    targetValue.meta[0] ← side
+}
+@ public
+fn setRevision(Match value, i32 revision) → void {
+    var Match targetValue ← value
+    targetValue.meta[1] ← revision
+}
+@ public
+fn clearRight(Match value, i32 index) → void {
+    var Match targetValue ← value
+    targetValue.meta[2 + index] ← 0
+}
+@ public
+fn setResult(Match value, i32 result) → void {
+    var Match targetValue ← value
+    targetValue.meta[9] ← result
+}
+@ public
+fn setLastMove(Match value, i32 from, i32 to, i32 promotion) → void {
+    var Match targetValue ← value
+    targetValue.meta[10] ← from
+    targetValue.meta[11] ← to
+    targetValue.meta[12] ← promotion
+}
+@ public
+fn setEnPassant(Match value, i32 target, i32 captured, i32 axis) → void {
+    var Match targetValue ← value
+    targetValue.meta[6] ← target
+    targetValue.meta[7] ← captured
+    targetValue.meta[8] ← axis
+}
+@ public
+fn clearEnPassant(Match value) → void { setEnPassant(value,-1,-1,-1) }
+
+@ public
+fn color(i8 piece) → i32 {
+    if piece > 0 { return 1 }
+    if piece < 0 { return -1 }
+    return 0
+}
+
+@ public
+fn canIncrement(Match value) → bool { return revision(value) < 1000000 }
+
+# Call only after structural validation has established array and scalar bounds.
+fn integrity(Match value) → string {
+    var i32 whiteKings ← 0
+    var i32 blackKings ← 0
+    for range 0‥512 const id {
+        const i8 code ← piece(value,id)
+        if code ≡ 1 { whiteKings ← whiteKings + 1 }
+        if code ≡ -1 { blackKings ← blackKings + 1 }
+        if code ≡ 0 and value.moved[id] ≢ 0 { return "EMPTY_MOVED" }
+    }
+    if whiteKings ≢ 1 or blackKings ≢ 1 { return "KINGS" }
+    const list<i32> rooks ← [0,7,504,511]
+    const list<i32> kings ← [4,4,508,508]
+    const list<i8> rookCodes ← [3,3,-3,-3]
+    const list<i8> kingCodes ← [1,1,-1,-1]
+    for range 0‥4 const index {
+        if right(value,index) {
+            const i32 rook ← rooks[index]
+            const i32 king ← kings[index]
+            if piece(value,rook) ≢ rookCodes[index] or value.moved[rook] ≢ 0 { return "CASTLING_STATE" }
+            if piece(value,king) ≢ kingCodes[index] or value.moved[king] ≢ 0 { return "CASTLING_STATE" }
+        }
+    }
+    if epTarget(value) ≥ 0 {
+        const i32 target ← epTarget(value)
+        const i32 captured ← epCaptured(value)
+        if piece(value,target) ≢ 0 or value.moved[captured] ≢ 1 { return "EN_PASSANT_STATE" }
+        if side(value) ≡ 1 and piece(value,captured) ≢ -6 { return "EN_PASSANT_STATE" }
+        if side(value) ≡ -1 and piece(value,captured) ≢ 6 { return "EN_PASSANT_STATE" }
+        var i32 offset ← 8
+        if epAxis(value) ≡ 2 { offset ← 64 }
+        const i32 expectedCaptured ← target - side(value) * offset
+        const i32 source ← target + side(value) * offset
+        if captured ≢ expectedCaptured or source < 0 or source > 511 { return "EN_PASSANT_STATE" }
+        if target % 8 ≢ captured % 8 { return "EN_PASSANT_STATE" }
+        if epAxis(value) ≡ 1 {
+            if target / 64 ≢ captured / 64 or target / 64 ≢ source / 64 { return "EN_PASSANT_STATE" }
+        } else {
+            if (target / 8) % 8 ≢ (captured / 8) % 8 { return "EN_PASSANT_STATE" }
+        }
+        if piece(value,source) ≢ 0 { return "EN_PASSANT_STATE" }
+        if lastFrom(value) ≢ source or lastTo(value) ≢ captured or lastPromotion(value) ≢ 0 { return "EN_PASSANT_STATE" }
+    }
+    return "OK"
+}
+
+@ public
+fn validate(string capsule) → string {
+    const string structural ← structure(capsule)
+    if structural ≢ "OK" { return structural }
+    const Match value ← reconstruct(capsule)
+    if encode(value) ≢ capsule { return "NONCANONICAL" }
+    return integrity(value)
+}
+
+# A checked opening has either no value or exactly one complete match.
+@ public
+fn open(string capsule) → list<Match> {
+    var list<Match> values ← empty
+    if validate(capsule) ≡ "OK" { values.append(reconstruct(capsule)) }
+    return values
+}
+
+@ public
+fn parseInteger(string token) → list<i32> {
+    var list<i32> values ← empty
+    if integer(token) {
+        const i32 value ← number(token)
+        if "§"(value) ≡ token { values.append(value) }
+    }
+    return values
+}
+
+@ public
+fn lastMoveJson(Match value) → string {
+    if lastFrom(value) ≡ -1 { return "null" }
+    return "{\"from\":" + "§"(lastFrom(value)) + ",\"to\":" + "§"(lastTo(value)) + ",\"promotion\":" + "§"(lastPromotion(value)) + "}"
+}

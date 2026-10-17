@@ -1,0 +1,211 @@
+import from "./match" game
+
+fn focused() → game.Match {
+    var game.Match value ← game.blank()
+    game.put(value,4,1)
+    game.put(value,508,-1)
+    return value
+}
+
+fn ep(i32 side, i32 axis) → game.Match {
+    var game.Match value ← focused()
+    game.setSide(value,side)
+    var i32 offset ← 8
+    if axis ≡ 2 { offset ← 64 }
+    const i32 target ← 219
+    const i32 captured ← target - side * offset
+    const i32 from ← target + side * offset
+    if side ≡ 1 { game.put(value,captured,-6) } else { game.put(value,captured,6) }
+    value.moved[captured] ← 1
+    game.setEnPassant(value,target,captured,axis)
+    game.setLastMove(value,from,captured,0)
+    game.setRevision(value,1)
+    return value
+}
+
+fn alter(string capsule, i32 field, string replacement) → string {
+    var list<string> fields ← capsule.split("|")
+    fields[field] ← replacement
+    return fields[0] + "|" + fields[1] + "|" + fields[2] + "|" + fields[3]
+}
+
+describe "match" {
+    test "initial positions flags rights and empty cells match approved 48 setup" {
+        const game.Match value ← game.initial()
+        const list<i8> back ← [3,5,4,2,1,4,5,3]
+        var i32 occupied ← 0
+        for range 0‥512 const id {
+            var i8 expected ← 0
+            if id < 8 { expected ← back[id] }
+            if id ≥ 64 and id < 80 { expected ← 6 }
+            if id ≥ 432 and id < 448 { expected ← -6 }
+            if id ≥ 504 { expected ← -back[id - 504] }
+            assert game.piece(value,id) ≡ expected
+            assert value.moved[id] ≡ 0
+            if expected ≢ 0 { occupied ← occupied + 1 }
+        }
+        assert occupied ≡ 48
+        assert game.side(value) ≡ 1
+        assert game.revision(value) ≡ 0
+        assert game.result(value) ≡ 0
+        for range 0‥4 const index { assert game.right(value,index) }
+        assert game.epTarget(value) ≡ -1
+        assert game.epCaptured(value) ≡ -1
+        assert game.epAxis(value) ≡ -1
+        assert game.lastMoveJson(value) ≡ "null"
+        assert game.validate(game.encode(value)) ≡ "OK"
+    }
+    test "checked codec round trips every board flag and metadata value" {
+        var game.Match value ← ep(-1,2)
+        game.setRevision(value,999999)
+        game.setResult(value,3)
+        const string capsule ← game.encode(value)
+        const list<game.Match> opened ← game.open(capsule)
+        assert opened.length() ≡ 1
+        const game.Match decoded ← opened[0]
+        assert game.encode(decoded) ≡ capsule
+        for range 0‥512 const id {
+            assert game.piece(decoded,id) ≡ game.piece(value,id)
+            assert decoded.moved[id] ≡ value.moved[id]
+        }
+        for range 0‥13 const id { assert decoded.meta[id] ≡ value.meta[id] }
+        assert game.lastMoveJson(decoded) ≡ "{\"from\":155,\"to\":283,\"promotion\":0}"
+    }
+    test "independent copy never aliases tensor flags or metadata" {
+        const game.Match value ← game.initial()
+        const string before ← game.encode(value)
+        var game.Match candidate ← game.copy(value)
+        game.put(candidate,0,0)
+        game.put(candidate,219,5)
+        candidate.moved[219] ← 1
+        game.setSide(candidate,-1)
+        game.setRevision(candidate,17)
+        game.clearRight(candidate,0)
+        game.setEnPassant(candidate,1,2,1)
+        game.setResult(candidate,2)
+        game.setLastMove(candidate,72,80,0)
+        assert game.encode(value) ≡ before
+        assert game.encode(candidate) ≢ before
+        assert game.piece(candidate,0) ≡ 0
+        assert game.piece(candidate,219) ≡ 5
+        assert candidate.moved[219] ≡ 1
+        assert game.revision(value) ≡ 0
+        assert game.right(value,0)
+        assert game.epTarget(value) ≡ -1
+        assert game.lastFrom(value) ≡ -1
+    }
+    test "malformed transport never returns a partial or empty-board success" {
+        const string capsule ← game.encode(game.initial())
+        assert game.open("bad").length() ≡ 0
+        assert game.open(capsule + "|").length() ≡ 0
+        assert game.open(capsule.replace("ZC1","ZC2")).length() ≡ 0
+        assert game.open(alter(capsule,1,"0")).length() ≡ 0
+        assert game.open(alter(capsule,2,"0")).length() ≡ 0
+        assert game.open(alter(capsule,3,"1,0")).length() ≡ 0
+        assert game.open(capsule.replace("3,5,4", "7,5,4")).length() ≡ 0
+        assert game.open(capsule.replace("3,5,4", "text,5,4")).length() ≡ 0
+        assert game.open(capsule.replace("3,5,4", "03,5,4")).length() ≡ 0
+        assert game.open(capsule.replace("3,5,4", "-0,5,4")).length() ≡ 0
+        assert game.open(capsule.replace("3,5,4", "１２,5,4")).length() ≡ 0
+        var string huge ← capsule
+        for range 0‥5 const index { huge ← huge + huge }
+        assert game.validate(huge) ≡ "TOO_LARGE"
+    }
+    test "one king per color and empty moved flags are state invariants" {
+        var game.Match value ← focused()
+        assert game.validate(game.encode(value)) ≡ "OK"
+        game.put(value,508,0)
+        assert game.validate(game.encode(value)) ≡ "KINGS"
+        game.put(value,508,-1)
+        game.put(value,219,1)
+        assert game.validate(game.encode(value)) ≡ "KINGS"
+        game.put(value,219,0)
+        value.moved[219] ← 1
+        assert game.validate(game.encode(value)) ≡ "EMPTY_MOVED"
+    }
+    test "castling rights require eligible original unmoved king and rook" {
+        var game.Match value ← game.initial()
+        game.put(value,0,0)
+        assert game.validate(game.encode(value)) ≡ "CASTLING_STATE"
+        game.clearRight(value,0)
+        assert game.validate(game.encode(value)) ≡ "OK"
+        game.put(value,0,3)
+        value.moved[0] ← 1
+        assert not game.right(value,0)
+        assert game.validate(game.encode(value)) ≡ "OK"
+        value.moved[7] ← 1
+        assert game.validate(game.encode(value)) ≡ "CASTLING_STATE"
+        game.clearRight(value,1)
+        value.moved[508] ← 1
+        assert game.validate(game.encode(value)) ≡ "CASTLING_STATE"
+        game.clearRight(value,2)
+        game.clearRight(value,3)
+        assert game.validate(game.encode(value)) ≡ "OK"
+    }
+    test "en passant integrity accepts both colors and axes" {
+        const list<i32> sides ← [1,-1]
+        for range 0‥2 const index {
+            for range 1‥3 const axis {
+                const game.Match value ← ep(sides[index],axis)
+                assert game.validate(game.encode(value)) ≡ "OK"
+                assert game.open(game.encode(value)).length() ≡ 1
+            }
+        }
+    }
+    test "en passant rejects wrong pawn target relationship and prior move" {
+        var game.Match value ← ep(1,1)
+        game.put(value,219,5)
+        assert game.validate(game.encode(value)) ≡ "EN_PASSANT_STATE"
+        game.put(value,219,0)
+        value.moved[211] ← 0
+        assert game.validate(game.encode(value)) ≡ "EN_PASSANT_STATE"
+        value.moved[211] ← 1
+        game.put(value,211,6)
+        assert game.validate(game.encode(value)) ≡ "EN_PASSANT_STATE"
+        game.put(value,211,-6)
+        game.setLastMove(value,228,211,0)
+        assert game.validate(game.encode(value)) ≡ "EN_PASSANT_STATE"
+        game.setLastMove(value,227,211,0)
+        game.setEnPassant(value,219,211,2)
+        assert game.validate(game.encode(value)) ≡ "EN_PASSANT_STATE"
+        game.setEnPassant(value,-1,211,1)
+        assert game.validate(game.encode(value)) ≡ "EN_PASSANT"
+    }
+    test "scalar bounds optional sentinels and last move promotion are canonical" {
+        var game.Match value ← focused()
+        game.setRevision(value,1000000)
+        assert game.validate(game.encode(value)) ≡ "OK"
+        assert not game.canIncrement(value)
+        game.setRevision(value,999999)
+        assert game.canIncrement(value)
+        game.setRevision(value,1000001)
+        assert game.validate(game.encode(value)) ≡ "REVISION"
+        game.setRevision(value,-1)
+        assert game.validate(game.encode(value)) ≡ "REVISION"
+        game.setRevision(value,0)
+        game.setLastMove(value,-1,1,0)
+        assert game.validate(game.encode(value)) ≡ "LAST_MOVE"
+        game.setLastMove(value,1,2,6)
+        assert game.validate(game.encode(value)) ≡ "LAST_MOVE"
+        game.setLastMove(value,1,2,5)
+        assert game.validate(game.encode(value)) ≡ "OK"
+        assert game.lastPromotion(value) ≡ 5
+        game.setSide(value,0)
+        assert game.validate(game.encode(value)) ≡ "SIDE"
+    }
+    test "bounded integer helper provides checked values for future request tokens" {
+        const list<i32> valid ← game.parseInteger("1000000")
+        assert valid.length() ≡ 1
+        assert valid[0] ≡ 1000000
+        assert game.parseInteger("-1")[0] ≡ -1
+        assert game.parseInteger("0")[0] ≡ 0
+        assert game.parseInteger("01").length() ≡ 0
+        assert game.parseInteger("-0").length() ≡ 0
+        assert game.parseInteger("1.0").length() ≡ 0
+        assert game.parseInteger("+1").length() ≡ 0
+        assert game.parseInteger(" 1").length() ≡ 0
+        assert game.parseInteger("word").length() ≡ 0
+        assert game.parseInteger("１２").length() ≡ 0
+        assert game.parseInteger("999999999999").length() ≡ 0
+    }
+}
