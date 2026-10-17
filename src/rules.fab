@@ -162,6 +162,58 @@ fn enPassantAllowed(game.Match value, i32 from, i32 to) → bool {
     return safe(candidate,game.side(value))
 }
 
+fn castleRook(game.Match value, i32 from, i32 to) → i32 {
+    const i32 side ← game.side(value)
+    var i32 base ← 0
+    var i8 king ← 1
+    var i8 rook ← 3
+    var i32 rightBase ← 0
+    if side ≡ -1 {
+        base ← 504
+        king ← -1
+        rook ← -3
+        rightBase ← 2
+    }
+    const i32 kingStart ← base + 4
+    const i32 queenTarget ← base + 2
+    const i32 kingTarget ← base + 6
+    if from ≢ kingStart or game.piece(value,from) ≢ king or value.moved[from] ≢ 0 { return -1 }
+    var i32 rookCell ← -1
+    var i32 rightIndex ← rightBase
+    if to ≡ queenTarget {
+        rookCell ← base
+        for range 1‥4 const file {
+            if game.piece(value,base + file) ≢ 0 { return -1 }
+        }
+    }
+    if to ≡ kingTarget {
+        rookCell ← base + 7
+        rightIndex ← rightBase + 1
+        for range 5‥7 const file {
+            if game.piece(value,base + file) ≢ 0 { return -1 }
+        }
+    }
+    if rookCell < 0 or not game.right(value,rightIndex) { return -1 }
+    if game.piece(value,rookCell) ≢ rook or value.moved[rookCell] ≢ 0 { return -1 }
+    return rookCell
+}
+
+fn castleAllowed(game.Match value, i32 from, i32 to) → bool {
+    const i32 rook ← castleRook(value,from,to)
+    if rook < 0 or inCheck(value,game.side(value)) { return false }
+    var i32 transit ← from + 1
+    var i32 rookTo ← from + 1
+    if to < from {
+        transit ← from - 1
+        rookTo ← from - 1
+    }
+    # The original rook stays put while checking the intermediate king square.
+    const game.Match intermediate ← construct(value,from,transit,0,transit,-1,-1)
+    if not safe(intermediate,game.side(value)) { return false }
+    const game.Match final ← construct(value,from,to,0,-1,rook,rookTo)
+    return safe(final,game.side(value))
+}
+
 @ public
 fn moves(game.Match value, i32 selected) → list<Move> {
     var list<Move> options ← empty
@@ -171,17 +223,26 @@ fn moves(game.Match value, i32 selected) → list<Move> {
     var list<i32> targets ← geometry.previews(value.board,value.moved,selected)
     const i32 skipped ← game.epTarget(value)
     if enPassantAllowed(value,selected,skipped) { targets.append(skipped) }
+    const i32 queenCastle ← selected - 2
+    const i32 kingCastle ← selected + 2
+    if castleAllowed(value,selected,queenCastle) { targets.append(queenCastle) }
+    if castleAllowed(value,selected,kingCastle) { targets.append(kingCastle) }
     targets.sort()
     for from targets const to {
         var string kind ← "move"
         var bool admitted ← false
-        if enPassantAllowed(value,selected,to) {
-            kind ← "en-passant"
+        if castleAllowed(value,selected,to) {
+            kind ← "castle"
             admitted ← true
         } else {
-            # Promotion is deliberately unavailable until its rule unit lands.
-            admitted ← not promotes(piece,to) and normalAllowed(value,selected,to)
-            if game.piece(value,to) ≢ 0 { kind ← "capture" }
+            if enPassantAllowed(value,selected,to) {
+                kind ← "en-passant"
+                admitted ← true
+            } else {
+                # Promotion is deliberately unavailable until its rule unit lands.
+                admitted ← not promotes(piece,to) and normalAllowed(value,selected,to)
+                if game.piece(value,to) ≢ 0 { kind ← "capture" }
+            }
         }
         if admitted {
             const list<i32> promotions ← empty
@@ -200,6 +261,12 @@ fn move(game.Match value, i32 expectedRevision, i32 from, i32 to, i32 promotion)
     const i8 piece ← game.piece(value,from)
     if piece ≡ 0 { return rejected("ILLEGAL_MOVE") }
     if game.color(piece) ≢ game.side(value) { return rejected("NOT_YOUR_TURN") }
+    if castleAllowed(value,from,to) {
+        if promotion ≢ 0 { return rejected("INVALID_PROMOTION") }
+        var i32 rookTo ← from + 1
+        if to < from { rookTo ← from - 1 }
+        return accepted(construct(value,from,to,0,-1,castleRook(value,from,to),rookTo))
+    }
     if enPassantAllowed(value,from,to) {
         if promotion ≢ 0 { return rejected("INVALID_PROMOTION") }
         return accepted(construct(value,from,to,0,game.epCaptured(value),-1,-1))

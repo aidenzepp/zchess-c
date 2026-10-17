@@ -1,0 +1,184 @@
+import from "./match" game
+import from "./rules" rules
+
+fn arena(i32 side) → game.Match {
+    var game.Match value ← game.blank()
+    game.put(value,4,1)
+    game.put(value,508,-1)
+    game.put(value,0,3)
+    game.put(value,7,3)
+    game.put(value,504,-3)
+    game.put(value,511,-3)
+    for range 2‥6 const index { value.meta[index] ← 1 }
+    game.setSide(value,side)
+    return value
+}
+
+fn kind(game.Match value, i32 source, i32 to) → string {
+    for from rules.moves(value,source) const option {
+        if option.to ≡ to {
+            assert option.promotions.length() ≡ 0
+            return option.kind
+        }
+    }
+    return "absent"
+}
+
+fn assertRejected(game.Match value, i32 source, i32 to) → void {
+    const string before ← game.encode(value)
+    const rules.Outcome result ← rules.move(value,game.revision(value),source,to,0)
+    assert result.error ≡ "ILLEGAL_MOVE"
+    assert result.values.length() ≡ 0
+    assert kind(value,source,to) ≡ "absent"
+    assert game.encode(value) ≡ before
+}
+
+describe "castle" {
+    test "both colors and file flanks castle as one detached state transition" {
+        const list<i32> sides ← [1,-1]
+        const list<i32> bases ← [0,504]
+        for range 0‥2 const color {
+            for range 0‥2 const flank {
+                const game.Match value ← arena(sides[color])
+                const i32 base ← bases[color]
+                const i32 source ← base + 4
+                var i32 to ← base + 2
+                var i32 rook ← base
+                var i32 rookTo ← base + 3
+                if flank ≡ 1 {
+                    to ← base + 6
+                    rook ← base + 7
+                    rookTo ← base + 5
+                }
+                const string before ← game.encode(value)
+                assert kind(value,source,to) ≡ "castle"
+                const rules.Outcome result ← rules.move(value,0,source,to,0)
+                assert result.error ≡ ""
+                const game.Match next ← result.values[0]
+                assert game.piece(next,source) ≡ 0
+                assert next.moved[source] ≡ 0
+                assert game.piece(next,rook) ≡ 0
+                assert next.moved[rook] ≡ 0
+                assert game.color(game.piece(next,to)) ≡ sides[color]
+                assert game.color(game.piece(next,rookTo)) ≡ sides[color]
+                assert next.moved[to] ≡ 1
+                assert next.moved[rookTo] ≡ 1
+                const i32 rightBase ← color * 2
+                assert not game.right(next,rightBase)
+                const i32 nextRight ← rightBase + 1
+                assert not game.right(next,nextRight)
+                assert game.revision(next) ≡ 1
+                const i32 nextSide ← -sides[color]
+                assert game.side(next) ≡ nextSide
+                assert game.lastFrom(next) ≡ source
+                assert game.lastTo(next) ≡ to
+                assert game.validate(game.encode(next)) ≡ "OK"
+                assert game.encode(value) ≡ before
+            }
+        }
+    }
+    test "every intervening square including queenside B must be empty" {
+        for range 1‥4 const file {
+            var game.Match value ← arena(1)
+            game.put(value,file,5)
+            assertRejected(value,4,2)
+        }
+        for range 5‥7 const file {
+            var game.Match value ← arena(-1)
+            game.put(value,504 + file,-5)
+            assertRejected(value,508,510)
+        }
+    }
+    test "king or rook moved flags and a missing captured rook reject" {
+        var game.Match value ← arena(1)
+        value.moved[4] ← 1
+        assertRejected(value,4,6)
+        value.moved[4] ← 0
+        value.moved[7] ← 1
+        assertRejected(value,4,6)
+        value.moved[7] ← 0
+        game.put(value,7,0)
+        assertRejected(value,4,6)
+        game.put(value,7,-3)
+        assertRejected(value,4,6)
+    }
+    test "moving king back never restores rights even with a clear path" {
+        const game.Match value ← arena(1)
+        const rules.Outcome away ← rules.move(value,0,4,12,0)
+        assert away.error ≡ ""
+        const rules.Outcome black ← rules.move(away.values[0],1,508,500,0)
+        assert black.error ≡ ""
+        const rules.Outcome back ← rules.move(black.values[0],2,12,4,0)
+        assert back.error ≡ ""
+        const rules.Outcome blackBack ← rules.move(back.values[0],3,500,508,0)
+        assert blackBack.error ≡ ""
+        assert not game.right(blackBack.values[0],0)
+        assert not game.right(blackBack.values[0],1)
+        assertRejected(blackBack.values[0],4,2)
+        assertRejected(blackBack.values[0],4,6)
+    }
+    test "moving a rook back or replacing a captured or promoted rook cannot revive rights" {
+        const game.Match value ← arena(1)
+        const rules.Outcome away ← rules.move(value,0,7,15,0)
+        assert away.error ≡ ""
+        const rules.Outcome black ← rules.move(away.values[0],1,508,500,0)
+        const rules.Outcome back ← rules.move(black.values[0],2,15,7,0)
+        const rules.Outcome blackBack ← rules.move(back.values[0],3,500,508,0)
+        assertRejected(blackBack.values[0],4,6)
+        var game.Match replacement ← arena(-1)
+        game.clearRight(replacement,2)
+        game.put(replacement,504,0)
+        game.put(replacement,504,-3)
+        assertRejected(replacement,508,506)
+        replacement.moved[504] ← 1
+        assertRejected(replacement,508,506)
+    }
+    test "check from an upper or lower tier forbids castling at the starting king" {
+        const list<i32> sides ← [1,-1]
+        const list<i32> sources ← [4,508]
+        for range 0‥2 const color {
+            var game.Match value ← arena(sides[color])
+            const i32 source ← sources[color]
+            const i32 attacker ← source + sides[color] * 64
+            if sides[color] ≡ 1 { game.put(value,attacker,-3) } else { game.put(value,attacker,3) }
+            assert rules.inCheck(value,sides[color])
+            assertRejected(value,source,source + 2)
+            assertRejected(value,source,source - 2)
+        }
+    }
+    test "transit attacks are checked before rook movement could cover them" {
+        var game.Match value ← arena(1)
+        game.put(value,66,-4)
+        assert not rules.inCheck(value,1)
+        const game.Match finalOnly ← rules.construct(value,4,2,0,-1,0,3)
+        assert rules.safe(finalOnly,1)
+        assertRejected(value,4,2)
+        var game.Match lower ← arena(-1)
+        game.put(lower,444,4)
+        assert not rules.inCheck(lower,-1)
+        assertRejected(lower,508,510)
+    }
+    test "destination safety includes upper tier attacks after rook movement" {
+        var game.Match value ← arena(1)
+        game.put(value,70,-3)
+        assert not rules.inCheck(value,1)
+        assertRejected(value,4,6)
+    }
+    test "attacks on rook or unused B square alone do not forbid castling" {
+        var game.Match value ← arena(1)
+        game.put(value,71,-3)
+        assert kind(value,4,6) ≡ "castle"
+        var game.Match queen ← arena(1)
+        game.put(queen,65,-3)
+        assert kind(queen,4,2) ≡ "castle"
+    }
+    test "no cross tier castle or extraneous promotion payload commits" {
+        const game.Match value ← arena(1)
+        assertRejected(value,4,70)
+        const string before ← game.encode(value)
+        const rules.Outcome result ← rules.move(value,0,4,6,2)
+        assert result.error ≡ "INVALID_PROMOTION"
+        assert result.values.length() ≡ 0
+        assert game.encode(value) ≡ before
+    }
+}
