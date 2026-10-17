@@ -61,8 +61,10 @@ export function pickCell(x, y, layout, plane = 'file-rank', fixedIndex = 0) {
   return cellAt(Math.floor((x - layout.left) / layout.step), 7 - Math.floor((y - layout.top) / layout.step), plane, fixedIndex);
 }
 
-function axisLabel(axis, index) {
-  return axis === 'file' ? String.fromCharCode(65 + index) : String(index + 1);
+export function axisLabel(axis, index) {
+  if (axis === 'file') return String.fromCharCode(65 + index);
+  if (axis === 'tier') return String.fromCharCode(83 + index);
+  return String(index + 1);
 }
 
 export function createView(container, onSelect) {

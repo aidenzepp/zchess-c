@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cellAt, projectCell, projectSnapshot, layoutForSize, pickCell, planeDefinition } from './slices.mjs';
+import { cellAt, projectCell, projectSnapshot, layoutForSize, pickCell, planeDefinition, axisLabel } from './slices.mjs';
+
+test('slice axes and fixed-axis labels use agreed coordinate labels', () => {
+  const expected = { file: ['A', 'H'], rank: ['1', '8'], tier: ['S', 'Z'] };
+  for (const plane of ['file-rank', 'file-tier', 'rank-tier']) {
+    const { horizontal, vertical, fixed } = planeDefinition(plane);
+    for (const axis of [horizontal, vertical, fixed]) {
+      assert.deepEqual([axisLabel(axis, 0), axisLabel(axis, 7)], expected[axis]);
+    }
+  }
+});
 
 for (const plane of ['file-rank', 'file-tier', 'rank-tier']) {
   for (const fixedIndex of [0, 7]) {
