@@ -24,6 +24,7 @@ function update(state) {
   fixture.disabled = state.fixtures.length === 0;
   if (state.fixtures.length) fixture.value = state.requested.fixture;
   element('view').value = presentation.view;
+  element('piece-style').value = presentation.pieceStyle;
   element('plane').value = presentation.plane;
   element('slice-controls').hidden = presentation.view !== 'slices';
   element('reset').disabled = presentation.view !== 'space';
@@ -49,6 +50,7 @@ function update(state) {
 controller = createController({ onChange: update });
 fixture.addEventListener('change', () => controller.selectFixture(fixture.value));
 element('view').addEventListener('change', event => controller.setPresentation({ view: event.target.value }));
+element('piece-style').addEventListener('change', event => controller.setPresentation({ pieceStyle: event.target.value }));
 element('plane').addEventListener('change', event => controller.setPresentation({ plane: event.target.value }));
 slice.addEventListener('change', () => controller.setPresentation({ fixedIndex: Number(slice.value) }));
 element('reset').addEventListener('click', () => views.space?.resetCamera());

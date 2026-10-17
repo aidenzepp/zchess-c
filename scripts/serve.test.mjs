@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFile } from 'node:child_process';
 import { request } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { PIECE_IMAGE_URLS } from '../web/piece-images.mjs';
 import { once } from 'node:events';
 import { FABER_BINARY, MAX_OUTPUT, ROOT, createServer, startServer, validateEnvelope } from './serve.mjs';
 
@@ -155,10 +157,16 @@ test('only contained browser files and fixed local three JS assets are served', 
     for (const path of ['/vendor/three/build/three.module.js', '/vendor/three/build/three.core.js', '/vendor/three/examples/jsm/controls/OrbitControls.js']) {
       assert.equal((await rawRequest(base, path)).status, 200, path);
     }
-    for (const path of ['/package.json', '/.git/config', '/.tools/faber/1.12.0/bin/faber', '/vendor/three/package.json', '/vendor/three/src/Three.js']) {
+    for (const path of PIECE_IMAGE_URLS) {
+      const response = await fetch(`${base}${path}`);
+      assert.equal(response.status, 200, path);
+      assert.equal(response.headers.get('content-type'), 'image/png', path);
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), await readFile(`${ROOT}${path}`), path);
+    }
+    for (const path of ['/assets/unknown.png', '/assets/white_king.PNG', '/assets/white_king.png/extra', '/assets/README.md', '/assets/', '/assets/white_king.svg', '/package.json', '/.git/config', '/.tools/faber/1.12.0/bin/faber', '/vendor/three/package.json', '/vendor/three/src/Three.js']) {
       assert.equal((await rawRequest(base, path)).status, 404, path);
     }
-    for (const path of ['/../package.json', '/%2e%2e/package.json', '/vendor/three/build/%2e%2e/%2e%2e/package.json', '/%5c..%5cpackage.json', '/%00', '/%invalid']) {
+    for (const path of ['/assets/../README.md', '/assets/%2e%2e/README.md', '/assets/%5cwhite_king.png', '/../package.json', '/%2e%2e/package.json', '/vendor/three/build/%2e%2e/%2e%2e/package.json', '/%5c..%5cpackage.json', '/%00', '/%invalid']) {
       assert.equal((await rawRequest(base, path)).status, 400, path);
     }
   } finally { await close(server); }

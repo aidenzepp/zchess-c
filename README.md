@@ -41,7 +41,7 @@ Choose a fixture, then click a piece or empty cell. The selected coordinate, des
 | 3D pointer | Drag to orbit; right-drag or Shift-drag to pan; wheel to zoom. Click a piece or dot to select. A drag does not select. |
 | 3D keyboard | Focus the canvas, then arrows to orbit, WASD to pan, +/− to zoom, R to reset. Form controls retain their normal keyboard behavior. |
 | 2D slice | Choose file/rank with fixed tier, file/tier with fixed rank, or rank/tier with fixed file; select the fixed coordinate and click a square. An off-slice selection is reported beneath the slice. |
-| Toolbar | Reset camera returns the 3D camera to its initial position; Clear selection removes the preview. |
+| Toolbar | Pieces defaults to Sprites; choose Text for letter labels or image-load recovery. Style changes preserve the current preview and camera without a new query. Reset camera returns the 3D camera to its initial position; Clear selection removes the preview. |
 
 Coordinates are file A–H, rank 1–8, and tier S–Z. In 3D, X is file, Y is tier/up, and Z is rank/depth. Internal cell identity is `file + 8*rank + 64*tier`, with each component 0–7. Labels use K/Q/R/B/N/P for king/queen/rook/bishop/knight/pawn and show piece color.
 
@@ -69,4 +69,4 @@ The previous C/raylib runtime and Makefile are retired; git history preserves th
 
 ## License and assets
 
-Newly authored rebuild code and its documentation are MIT licensed; see [LICENSE](LICENSE). Existing `assets/*.png` files are retained with unverified provenance and are excluded from that grant. The viewer generates piece-label billboards rather than loading those PNGs. Third-party tools and dependencies retain their own licenses.
+Newly authored rebuild code and its documentation are MIT licensed; see [LICENSE](LICENSE). Existing `assets/*.png` files are retained with unverified provenance and are excluded from that grant. The local viewer uses those PNGs by default in both views, with generated piece labels available through the Text option. Third-party tools and dependencies retain their own licenses.

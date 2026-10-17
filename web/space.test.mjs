@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {pieceImageUrl, PIECE_IMAGE_URLS} from './piece-images.mjs';
 import {cellPosition, pickCell, cameraIntent, trackPointer, isPickGesture, createView} from './space.mjs';
 
 test('all 512 cell IDs map bijectively to file X, tier Y, rank Z', () => {
@@ -54,4 +55,19 @@ test('only a primary click picks; any drag stays suppressed after returning', ()
 
 test('public renderer entry is available without importing a DOM or GPU', () => {
   assert.equal(typeof createView, 'function');
+});
+
+test('all signed piece codes use the frozen twelve existing PNG URLs', () => {
+  assert.equal(Object.isFrozen(PIECE_IMAGE_URLS), true);
+  const urls = [];
+  for (const [sign, color] of [[1, 'white'], [-1, 'black']]) {
+    for (const [index, name] of ['king', 'queen', 'rook', 'bishop', 'knight', 'pawn'].entries()) {
+      const url = `/assets/${color}_${name}.png`;
+      assert.equal(pieceImageUrl(sign * (index + 1)), url);
+      urls.push(url);
+    }
+  }
+  assert.deepEqual(PIECE_IMAGE_URLS, urls);
+  assert.equal(pieceImageUrl(0), null);
+  for (const code of [-7, 7, 1.5, NaN, Infinity, '1', null, undefined]) assert.throws(() => pieceImageUrl(code), RangeError);
 });

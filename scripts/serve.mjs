@@ -1,3 +1,4 @@
+import { PIECE_IMAGE_URLS } from '../web/piece-images.mjs';
 import { execFile } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
@@ -69,7 +70,12 @@ async function staticFile(rawPath, res) {
     send(res, 400, envelope('INVALID_REQUEST', 'Invalid path')); return;
   }
   let root, path;
-  if (pathname.startsWith('/vendor/three/')) {
+  if (PIECE_IMAGE_URLS.includes(pathname)) {
+    root = join(ROOT, 'assets');
+    path = join(root, pathname.slice('/assets/'.length));
+  } else if (pathname.startsWith('/assets/')) {
+    send(res, 404, envelope('NOT_FOUND', 'Not found')); return;
+  } else if (pathname.startsWith('/vendor/three/')) {
     const asset = pathname.slice('/vendor/three/'.length);
     if (!/^(?:build\/[^/]+|examples\/jsm\/.+)\.js$/.test(asset)) { send(res, 404, envelope('NOT_FOUND', 'Not found')); return; }
     root = join(ROOT, 'node_modules/three');

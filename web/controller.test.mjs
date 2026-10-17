@@ -52,18 +52,40 @@ test('current failure remains visible without old highlights and can recover', a
   assert.equal(controller.getState().snapshot.selected, -1);
 });
 
-test('presentation changes preserve board/query identity and never query', async () => {
+test('presentation defaults to sprites; valid style changes preserve snapshot and never query', async () => {
   let calls = 0;
-  const controller = createController({ transport: async identity => { calls++; return snapshot(identity); } });
+  const controller = createController({ transport: async identity => {
+    calls++;
+    const result = snapshot(identity);
+    if (identity.selected === 227) { result.cells[227] = 3; result.destinations = [228, 235]; }
+    return result;
+  } });
+  assert.equal(controller.getState().presentation.pieceStyle, 'sprites');
   await controller.start();
+  await controller.select(227);
   const before = controller.getState().snapshot;
+  const requested = controller.getState().requested;
+  const targets = before.destinations;
   const contents = JSON.stringify(before);
   controller.setPresentation({ view: 'slices', plane: 'rank-tier', fixedIndex: 7 });
+  for (const pieceStyle of ['text', 'sprites', 'text', 'sprites']) {
+    controller.setPresentation({ pieceStyle });
+    assert.deepEqual(controller.getState().presentation, { view: 'slices', plane: 'rank-tier', fixedIndex: 7, pieceStyle });
+    assert.equal(controller.getState().snapshot, before);
+    assert.equal(controller.getState().snapshot.destinations, targets);
+    assert.equal(controller.getState().requested, requested);
+  }
+  const state = controller.getState();
+  for (const pieceStyle of ['png', '', null, undefined, 0]) {
+    assert.throws(() => controller.setPresentation({ pieceStyle }), RangeError);
+    assert.equal(controller.getState(), state);
+  }
   controller.setPresentation({ view: 'space' });
-  assert.equal(calls, 1);
+  assert.equal(controller.getState().presentation.pieceStyle, 'sprites');
+  assert.equal(calls, 2);
   assert.equal(controller.getState().snapshot, before);
   assert.equal(JSON.stringify(before), contents);
-  assert.deepEqual(controller.getState().requested, { fixture: 'initial', selected: -1 });
+  assert.deepEqual(controller.getState().requested, { fixture: 'initial', selected: 227 });
 });
 
 test('disposal aborts and ignores pending responses', async () => {

@@ -1,3 +1,5 @@
+import { pieceImageUrl } from './piece-images.mjs';
+
 const PLANES = Object.freeze({
   'file-rank': { horizontal: 'file', vertical: 'rank', fixed: 'tier', axes: [0, 1, 2] },
   'file-tier': { horizontal: 'file', vertical: 'tier', fixed: 'rank', axes: [0, 2, 1] },
@@ -78,14 +80,38 @@ export function createView(container, onSelect) {
   const status = document.createElement('div');
   status.setAttribute('role', 'status');
   status.style.cssText = 'font:14px system-ui;padding:8px;color:inherit';
-  root.append(canvas, status);
+  const imageStatus = document.createElement('div');
+  imageStatus.setAttribute('role', 'status');
+  imageStatus.style.cssText = 'font:14px system-ui;padding:8px;color:inherit';
+  root.append(canvas, status, imageStatus);
   container.append(root);
   const ctx = canvas.getContext('2d');
   if (!ctx) { root.remove(); throw new Error('Canvas2D is unavailable'); }
   let snapshot = null;
-  let presentation = { plane: 'file-rank', fixedIndex: 0 };
+  let presentation = { plane: 'file-rank', fixedIndex: 0, pieceStyle: 'sprites' };
   let layout = layoutForSize(0, 0);
   let disposed = false;
+  const images = new Map();
+  function imageFor(code) {
+    const url = pieceImageUrl(code);
+    if (!images.has(url)) {
+      const image = new window.Image();
+      const entry = { image, state: 'pending' };
+      images.set(url, entry);
+      image.onload = () => { if (!disposed) { entry.state = 'ready'; draw(); } };
+      image.onerror = () => { if (!disposed) { entry.state = 'failed'; draw(); } };
+      image.src = url;
+    }
+    return images.get(url);
+  }
+  function updateImageStatus(cells) {
+    const urls = presentation.pieceStyle === 'sprites' ? [...new Set(cells.filter(cell => cell.piece).map(cell => pieceImageUrl(cell.piece)))] : [];
+    const failed = urls.filter(url => images.get(url)?.state === 'failed');
+    const pending = urls.filter(url => images.get(url)?.state === 'pending');
+    imageStatus.setAttribute('role', failed.length ? 'alert' : 'status');
+    imageStatus.textContent = [failed.length ? `Piece images failed: ${failed.join(', ')}. Choose Text to continue.` : '',
+      pending.length ? `Loading piece images: ${pending.join(', ')}…` : ''].filter(Boolean).join(' ');
+  }
 
   function draw() {
     if (disposed) return;
@@ -101,7 +127,7 @@ export function createView(container, onSelect) {
     const { plane, fixedIndex } = presentation;
     const definition = planeDefinition(plane);
     const { left, top, step, size } = layout;
-    if (!snapshot) { status.textContent = 'No current snapshot'; return; }
+    if (!snapshot) { status.textContent = 'No current snapshot'; updateImageStatus([]); return; }
     const projected = projectSnapshot(snapshot, plane, fixedIndex);
     status.textContent = `${definition.fixed} ${axisLabel(definition.fixed, fixedIndex)} · ${snapshot.selected === -1 ? 'No selection' : `Selected cell ${snapshot.selected}${projected.selectionOffSlice ? ' is outside this slice' : ''}`} · ${projected.cells.filter(cell => cell.target).length} visible targets of ${snapshot.destinations.length}`;
     if (!size) return;
@@ -119,7 +145,15 @@ export function createView(container, onSelect) {
         ctx.lineWidth = 2;
         ctx.strokeRect(x + 4, y + 4, step - 8, step - 8);
       }
-      if (cell.piece) {
+      if (cell.piece && presentation.pieceStyle === 'sprites') {
+        const entry = imageFor(cell.piece);
+        if (entry.state === 'ready') {
+          const image = entry.image;
+          const scale = step * 0.8 / Math.max(image.naturalWidth, image.naturalHeight);
+          const imageWidth = image.naturalWidth * scale, imageHeight = image.naturalHeight * scale;
+          ctx.drawImage(image, x + (step - imageWidth) / 2, y + (step - imageHeight) / 2, imageWidth, imageHeight);
+        }
+      } else if (cell.piece) {
         const radius = step * 0.29;
         ctx.beginPath();
         ctx.arc(x + step / 2, y + step / 2, radius, 0, Math.PI * 2);
@@ -138,6 +172,7 @@ export function createView(container, onSelect) {
         ctx.strokeRect(x + 2, y + 2, step - 4, step - 4);
       }
     }
+    updateImageStatus(projected.cells);
     ctx.fillStyle = '#61766b';
     ctx.font = '12px system-ui';
     for (let index = 0; index < 8; index++) {
@@ -167,10 +202,12 @@ export function createView(container, onSelect) {
     render(nextSnapshot, nextPresentation = {}) {
       const plane = nextPresentation.plane ?? 'file-rank';
       const fixedIndex = nextPresentation.fixedIndex ?? 0;
+      const pieceStyle = nextPresentation.pieceStyle ?? 'sprites';
+      if (!['sprites', 'text'].includes(pieceStyle)) throw new RangeError('Invalid piece style');
       planeDefinition(plane);
       checkIndex(fixedIndex);
       snapshot = nextSnapshot;
-      presentation = { plane, fixedIndex };
+      presentation = { plane, fixedIndex, pieceStyle };
       draw();
     },
     resetCamera() {},
@@ -179,6 +216,8 @@ export function createView(container, onSelect) {
       observer?.disconnect();
       window.removeEventListener('resize', draw);
       canvas.removeEventListener('click', select);
+      for (const { image } of images.values()) { image.onload = null; image.onerror = null; }
+      images.clear();
       root.remove();
     },
   };

@@ -19,7 +19,7 @@ export function createController({ transport = fetchSnapshot, onChange = () => {
   let state = {
     requested: { fixture: 'initial', selected: -1 },
     snapshot: null, fixtures: [], pending: false, error: null,
-    presentation: { view: 'space', plane: 'file-rank', fixedIndex: 0 },
+    presentation: { view: 'space', plane: 'file-rank', fixedIndex: 0, pieceStyle: 'sprites' },
   };
   const publish = patch => { state = { ...state, ...patch }; if (!disposed) onChange(state); };
   async function query(identity) {
@@ -48,7 +48,7 @@ export function createController({ transport = fetchSnapshot, onChange = () => {
     selectFixture(fixture) { return query({ fixture, selected: -1 }); },
     setPresentation(patch) {
       const next = { ...state.presentation, ...patch };
-      if (!['space', 'slices'].includes(next.view) || !['file-rank', 'file-tier', 'rank-tier'].includes(next.plane) || !Number.isInteger(next.fixedIndex) || next.fixedIndex < 0 || next.fixedIndex > 7) throw new RangeError('Invalid presentation');
+      if (!['sprites', 'text'].includes(next.pieceStyle) || !['space', 'slices'].includes(next.view) || !['file-rank', 'file-tier', 'rank-tier'].includes(next.plane) || !Number.isInteger(next.fixedIndex) || next.fixedIndex < 0 || next.fixedIndex > 7) throw new RangeError('Invalid presentation');
       publish({ presentation: next });
     },
     dispose() { disposed = true; generation++; abort?.abort(); },
