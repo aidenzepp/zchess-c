@@ -24,3 +24,7 @@ bin/
 
 # Specific executables
 zchess
+
+# Local compiler and npm dependencies
+.tools/
+node_modules/

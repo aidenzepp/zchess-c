@@ -1,0 +1,176 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { execFile } from 'node:child_process';
+import { request } from 'node:http';
+import { once } from 'node:events';
+import { FABER_BINARY, MAX_OUTPUT, ROOT, createServer, startServer, validateEnvelope } from './serve.mjs';
+
+async function listen(server) {
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  return `http://127.0.0.1:${server.address().port}`;
+}
+async function close(server) { await new Promise(resolve => server.close(resolve)); }
+async function json(url, options) {
+  const response = await fetch(url, options);
+  return { status: response.status, body: await response.json(), headers: response.headers };
+}
+function mockExec(mode, record = {}) {
+  return (file, args, options, callback) => {
+    record.file = file; record.args = args; record.options = options;
+    const script = mode === 'timeout' || mode === 'hold' ? 'setInterval(() => {}, 1000)' :
+      mode === 'overflow' ? `process.stdout.write('x'.repeat(${MAX_OUTPUT + 1}))` :
+      mode === 'invalid' ? 'process.stdout.write("not JSON")' :
+      mode === 'schema' ? 'process.stdout.write(JSON.stringify({ok:true,snapshot:{}}))' :
+      'process.stderr.write("private diagnostic"); process.exit(7)';
+    const child = execFile(process.execPath, ['-e', script], options, callback);
+    record.child = child;
+    return child;
+  };
+}
+
+// Test snapshots are boundary fixtures only; production data always comes from Faber.
+function snapshot() {
+  return { ok: true, snapshot: { schemaVersion: 1, fixtureId: 'test', fixtures: ['test'], selected: -1, cells: Array(512).fill(0), moved: Array(512).fill(0), destinations: [] } };
+}
+
+test('snapshot boundary rejects incomplete, invalid and unsorted data', () => {
+  assert.equal(validateEnvelope(snapshot(), 'test', -1), true);
+  for (const mutate of [s => s.cells.pop(), s => s.cells[0] = 7, s => s.moved[0] = 2, s => s.destinations = [1, 1], s => s.destinations = [3, 2], s => s.selected = null, s => s.fixtures = []]) {
+    const value = snapshot(); mutate(value.snapshot);
+    assert.equal(validateEnvelope(value, 'test', -1), false);
+  }
+  assert.equal(validateEnvelope({ ok: false, error: { code: 'UNKNOWN_FIXTURE', message: 'Unknown fixture' } }, 'test', -1), true);
+  assert.equal(validateEnvelope({ ok: false, error: { code: 'OTHER', message: 'Unknown' } }, 'test', -1), false);
+});
+
+test('actual pinned Faber serves complete current-source snapshots and semantic errors', async () => {
+  const server = createServer();
+  const base = await listen(server);
+  try {
+    const first = await json(`${base}/api/snapshot?fixture=initial&selected=-1`);
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get('content-type'), 'application/json');
+    assert.equal(first.headers.get('access-control-allow-origin'), null);
+    assert.equal(validateEnvelope(first.body, 'initial', -1), true);
+    assert.equal(first.body.snapshot.cells.filter(Boolean).length, 48);
+    assert.deepEqual(first.body.snapshot.destinations, []);
+    const empty = first.body.snapshot.cells.indexOf(0);
+    const selected = await json(`${base}/api/snapshot?fixture=initial&selected=${empty}`);
+    assert.equal(selected.status, 200);
+    assert.equal(selected.body.snapshot.selected, empty);
+    assert.deepEqual(selected.body.snapshot.destinations, []);
+    const unknown = await json(`${base}/api/snapshot?fixture=unknown&selected=-1`);
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.body.error.code, 'UNKNOWN_FIXTURE');
+  } finally { await close(server); }
+});
+
+test('malformed and duplicate queries and remote Host/Origin never invoke a child', async () => {
+  let calls = 0;
+  const server = createServer({ execFileImpl() { calls++; throw new Error('Must not run'); } });
+  const base = await listen(server);
+  try {
+    for (const query of ['', '?fixture=initial', '?fixture=initial&selected=-1&selected=0', '?fixture=initial&fixture=initial&selected=-1', '?fixture=initial&selected=512', '?fixture=initial&selected=-2', '?fixture=initial&selected=1.0', '?fixture=initial&selected=00', '?fixture=initial&selected=-1&extra=1', '?fixture=..%2Fsrc&selected=0']) {
+      const result = await json(`${base}/api/snapshot${query}`);
+      assert.equal(result.status, 400, query);
+      assert.equal(result.body.error.code, 'INVALID_REQUEST');
+    }
+    for (const headers of [{ Host: 'evil.example' }, { Origin: 'https://evil.example' }, { Origin: 'null' }, { Host: 'localhost.evil.example' }]) {
+      const result = await rawRequest(base, '/api/snapshot?fixture=initial&selected=-1', { headers });
+      assert.equal(result.status, 400, JSON.stringify(headers));
+    }
+    assert.equal(calls, 0);
+    assert.equal((await json(`${base}/api/snapshot?fixture=initial&selected=-1`, { method: 'POST' })).status, 405);
+  } finally { await close(server); }
+});
+
+for (const [mode, status, code] of [['timeout', 504, 'FABER_TIMEOUT'], ['failure', 502, 'FABER_FAILURE'], ['overflow', 502, 'FABER_FAILURE'], ['invalid', 502, 'INVALID_FABER_JSON'], ['schema', 502, 'INVALID_FABER_JSON']]) {
+  test(`child ${mode} is a bounded transport error`, async () => {
+    const record = {};
+    const server = createServer({ execFileImpl: mockExec(mode, record), timeoutMs: mode === 'timeout' ? 50 : 2000 });
+    const base = await listen(server);
+    try {
+      const result = await json(`${base}/api/snapshot?fixture=initial&selected=-1`);
+      assert.equal(result.status, status);
+      assert.equal(result.body.error.code, code);
+      assert.equal(JSON.stringify(result.body).includes('private diagnostic'), false);
+      assert.equal(record.file, FABER_BINARY);
+      assert.deepEqual(record.args, ['run', '--locale', 'en', ROOT, '--', 'initial', '-1']);
+      assert.equal(record.options.cwd, ROOT);
+      assert.equal(record.options.shell, false);
+      assert.equal(record.options.maxBuffer, MAX_OUTPUT);
+      assert.equal(record.options.killSignal, 'SIGKILL');
+      assert.notEqual(record.child.exitCode ?? record.child.signalCode, null);
+    } finally { await close(server); }
+  });
+}
+
+test('two children maximum; disconnect and shutdown kill children', async () => {
+  const children = [];
+  let launched;
+  const nextLaunch = () => new Promise(resolve => { launched = resolve; });
+  const execute = mockExec('hold');
+  const server = createServer({ execFileImpl(...args) { const child = execute(...args); children.push(child); launched(); return child; } });
+  const base = await listen(server);
+  const launchOne = nextLaunch();
+  const first = request(`${base}/api/snapshot?fixture=initial&selected=-1`);
+  first.on('error', () => {}); first.end();
+  await launchOne;
+  const launchTwo = nextLaunch();
+  const second = request(`${base}/api/snapshot?fixture=initial&selected=0`);
+  second.on('error', () => {}); second.end();
+  await launchTwo;
+  try {
+    const busy = await json(`${base}/api/snapshot?fixture=initial&selected=1`);
+    assert.equal(busy.status, 503);
+    assert.equal(busy.body.error.code, 'BUSY');
+    assert.equal(children.length, 2);
+    const firstExit = once(children[0], 'exit');
+    first.destroy();
+    const [, signal] = await firstExit;
+    assert.equal(signal, 'SIGKILL');
+    const secondExit = once(children[1], 'exit');
+    await close(server);
+    assert.equal((await secondExit)[1], 'SIGKILL');
+  } finally { first.destroy(); second.destroy(); if (server.listening) await close(server); }
+});
+
+function rawRequest(base, path, options = {}) {
+  return new Promise((resolve, reject) => {
+    const req = request(`${base}/`, { ...options, path }, res => {
+      let body = ''; res.setEncoding('utf8'); res.on('data', chunk => body += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, body, headers: res.headers }));
+    }); req.on('error', reject); req.end();
+  });
+}
+
+test('only contained browser files and fixed local three JS assets are served', async () => {
+  const server = createServer();
+  const base = await listen(server);
+  try {
+    const slice = await rawRequest(base, '/slices.mjs');
+    assert.equal(slice.status, 200);
+    assert.match(slice.headers['content-type'], /javascript/);
+    for (const path of ['/vendor/three/build/three.module.js', '/vendor/three/build/three.core.js', '/vendor/three/examples/jsm/controls/OrbitControls.js']) {
+      assert.equal((await rawRequest(base, path)).status, 200, path);
+    }
+    for (const path of ['/package.json', '/.git/config', '/.tools/faber/1.12.0/bin/faber', '/vendor/three/package.json', '/vendor/three/src/Three.js']) {
+      assert.equal((await rawRequest(base, path)).status, 404, path);
+    }
+    for (const path of ['/../package.json', '/%2e%2e/package.json', '/vendor/three/build/%2e%2e/%2e%2e/package.json', '/%5c..%5cpackage.json', '/%00', '/%invalid']) {
+      assert.equal((await rawRequest(base, path)).status, 400, path);
+    }
+  } finally { await close(server); }
+});
+
+test('startup checks pinned compiler and current source; busy requested port refuses readiness', async () => {
+  const logs = [];
+  const server = await startServer({ port: 0, log: text => logs.push(text) });
+  try {
+    assert.deepEqual(logs, [`Ready: http://127.0.0.1:${server.address().port}`]);
+    const failedLogs = [];
+    await assert.rejects(startServer({ port: server.address().port, log: text => failedLogs.push(text) }), { code: 'EADDRINUSE' });
+    assert.deepEqual(failedLogs, []);
+  } finally { await close(server); }
+});
