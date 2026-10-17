@@ -1,0 +1,4 @@
+@ public
+fn previews(ti8[8,8,8] board, list<i8> moved, i32 selected) → list<i32> {
+    return empty
+}

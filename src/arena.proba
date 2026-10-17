@@ -1,0 +1,99 @@
+import from "./arena" arena
+
+describe "arena" {
+    test "coordinate identity and flattening preserve all 512 cells" {
+        const ti8[] seed ← empty
+        var ti8[8,8,8] board ← seed.create(0, [8,8,8])
+        board[[2,3,4]] ← 5
+        board[[4,3,2]] ← -4
+        const list<i8> cells ← arena.flatten(board)
+        assert arena.cell(0,0,0) ≡ 0
+        assert arena.cell(7,7,7) ≡ 511
+        assert arena.cell(2,3,4) ≡ 282
+        assert cells.length() ≡ 512
+        assert cells[282] ≡ 5
+        assert cells[156] ≡ -4
+        assert cells[283] ≡ 0
+    }
+    test "initial setup matches every C table position and all other cells are empty" {
+        const list<i8> cells ← arena.flatten(arena.createBoard("initial"))
+        const list<i8> back ← [3,5,4,2,1,4,5,3]
+        var i32 occupied ← 0
+        for range 0‥512 const id {
+            var i8 expected ← 0
+            if id < 8 { expected ← back[id] }
+            if id ≥ 64 and id < 80 { expected ← 6 }
+            if id ≥ 432 and id < 448 { expected ← -6 }
+            if id ≥ 504 { expected ← -back[id - 504] }
+            assert cells[id] ≡ expected
+            if cells[id] ≠ 0 { occupied ← occupied + 1 }
+        }
+        assert occupied ≡ 48
+        const list<i8> moved ← arena.movedState("initial")
+        assert moved.length() ≡ 512
+        for range 0‥512 const id { assert moved[id] ≡ 0 }
+    }
+    test "fixture catalog and centered pieces are concrete tensor state" {
+        assert arena.fixtures().length() ≡ 10
+        assert arena.known("initial")
+        assert not arena.known("unknown")
+        const list<i8> rook ← arena.flatten(arena.createBoard("rook-center"))
+        const list<i8> bishop ← arena.flatten(arena.createBoard("bishop-center"))
+        const list<i8> queen ← arena.flatten(arena.createBoard("queen-center"))
+        const list<i8> knight ← arena.flatten(arena.createBoard("knight-center"))
+        const list<i8> king ← arena.flatten(arena.createBoard("king-center"))
+        assert rook[219] ≡ 3
+        assert bishop[219] ≡ 4
+        assert queen[219] ≡ 2
+        assert knight[219] ≡ 5
+        assert king[219] ≡ 1
+    }
+    test "pawn color lanes captures and moved metadata are independent" {
+        const list<i8> white ← arena.flatten(arena.createBoard("pawn-white"))
+        const list<i8> black ← arena.flatten(arena.createBoard("pawn-black"))
+        assert white[219] ≡ 6
+        assert white[226] ≡ -6
+        assert white[284] ≡ -6
+        assert white[227] ≡ 0
+        assert white[283] ≡ 0
+        assert black[292] ≡ -6
+        assert black[283] ≡ 6
+        assert black[229] ≡ 6
+        assert black[284] ≡ 0
+        assert black[228] ≡ 0
+        const list<i8> moved ← arena.movedState("pawn-moved")
+        const list<i8> unmoved ← arena.movedState("pawn-white")
+        for range 0‥512 const id {
+            assert unmoved[id] ≡ 0
+            if id ≡ 219 { assert moved[id] ≡ 1 } else { assert moved[id] ≡ 0 }
+        }
+    }
+    test "blockers include both colors on every rook axis" {
+        const list<i8> cells ← arena.flatten(arena.createBoard("blockers"))
+        assert cells[219] ≡ 3
+        assert cells[221] ≡ 6
+        assert cells[217] ≡ -6
+        assert cells[235] ≡ 6
+        assert cells[203] ≡ -6
+        assert cells[347] ≡ 6
+        assert cells[91] ≡ -6
+    }
+    test "invalid inputs return semantic errors before state construction" {
+        assert arena.snapshot("unknown", -1) ≡ "{\"ok\":false,\"error\":{\"code\":\"UNKNOWN_FIXTURE\",\"message\":\"Unknown fixture\"}}"
+        assert arena.snapshot("initial", -2) ≡ "{\"ok\":false,\"error\":{\"code\":\"INVALID_SELECTION\",\"message\":\"Invalid selection\"}}"
+        assert arena.snapshot("initial", 512) ≡ arena.snapshot("initial", -2)
+    }
+    test "empty unselected and occupied snapshots are deterministic detached queries" {
+        const string unselected ← arena.snapshot("initial", -1)
+        assert unselected.contains("\"selected\":-1")
+        assert unselected.contains("\"destinations\":[]")
+        const string emptyCell ← arena.snapshot("rook-center", 0)
+        assert emptyCell.contains("\"selected\":0")
+        assert emptyCell.contains("\"destinations\":[]")
+        const string occupied ← arena.snapshot("rook-center", 219)
+        assert occupied.contains("\"selected\":219")
+        assert occupied.contains("\"destinations\":[]")
+        assert arena.snapshot("initial", -1) ≡ unselected
+        assert arena.snapshot("rook-center", 219) ≡ occupied
+    }
+}

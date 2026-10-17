@@ -1,0 +1,11 @@
+[package]
+name = "zchess"
+version = "0.1.0"
+edition = "2026"
+
+[paths]
+source = "src"
+entry = "main.fab"
+
+[build]
+kind = "bin"

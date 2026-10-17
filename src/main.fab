@@ -1,0 +1,9 @@
+import from "./arena" arena
+
+@ cli "zchess"
+@ operand string fixture description "Fixture identifier"
+@ operand string selected description "Selected cell, or -1"
+main args args {
+    const i32 selected ← args.selected ↦ i32
+    print arena.snapshot(args.fixture, selected)
+}

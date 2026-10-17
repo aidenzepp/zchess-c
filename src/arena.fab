@@ -1,0 +1,129 @@
+import from "./geometry" geometry
+
+@ public
+fn cell(i32 file, i32 rank, i32 tier) → i32 {
+    return file + 8 * rank + 64 * tier
+}
+
+@ public
+fn fixtures() → list<string> {
+    return ["initial", "rook-center", "bishop-center", "queen-center", "knight-center", "king-center", "pawn-white", "pawn-black", "pawn-moved", "blockers"]
+}
+
+@ public
+fn known(string fixture) → bool {
+    return fixtures().contains(fixture)
+}
+
+@ public
+fn createBoard(string fixture) → ti8[8,8,8] {
+    const ti8[] seed ← empty
+    var ti8[8,8,8] board ← seed.create(0, [8,8,8])
+    if fixture ≡ "initial" {
+        const list<i8> back ← [3, 5, 4, 2, 1, 4, 5, 3]
+        for range 0‥8 const file {
+            board[[file,0,0]] ← back[file]
+            board[[file,7,7]] ← -back[file]
+            board[[file,0,1]] ← 6
+            board[[file,1,1]] ← 6
+            board[[file,6,6]] ← -6
+            board[[file,7,6]] ← -6
+        }
+    }
+    if fixture ≡ "rook-center" { board[[3,3,3]] ← 3 }
+    if fixture ≡ "bishop-center" { board[[3,3,3]] ← 4 }
+    if fixture ≡ "queen-center" { board[[3,3,3]] ← 2 }
+    if fixture ≡ "knight-center" { board[[3,3,3]] ← 5 }
+    if fixture ≡ "king-center" { board[[3,3,3]] ← 1 }
+    if fixture ≡ "pawn-white" or fixture ≡ "pawn-moved" {
+        board[[3,3,3]] ← 6
+        board[[2,4,3]] ← -6
+        board[[4,3,4]] ← -6
+    }
+    if fixture ≡ "pawn-black" {
+        board[[4,4,4]] ← -6
+        board[[3,3,4]] ← 6
+        board[[5,4,3]] ← 6
+    }
+    if fixture ≡ "blockers" {
+        board[[3,3,3]] ← 3
+        board[[5,3,3]] ← 6
+        board[[1,3,3]] ← -6
+        board[[3,5,3]] ← 6
+        board[[3,1,3]] ← -6
+        board[[3,3,5]] ← 6
+        board[[3,3,1]] ← -6
+    }
+    return board
+}
+
+@ public
+fn movedState(string fixture) → list<i8> {
+    var list<i8> moved ← empty
+    for range 0‥512 const id {
+        if fixture ≡ "pawn-moved" and id ≡ 219 {
+            moved.append(1)
+        } else {
+            moved.append(0)
+        }
+    }
+    return moved
+}
+
+@ public
+fn flatten(ti8[8,8,8] board) → list<i8> {
+    var list<i8> cells ← empty
+    for range 0‥8 const tier {
+        for range 0‥8 const rank {
+            for range 0‥8 const file {
+                cells.append(board[[file,rank,tier]])
+            }
+        }
+    }
+    return cells
+}
+
+fn cellsJson(list<i8> values) → string {
+    var string json ← "["
+    for range 0‥512 const id {
+        if id > 0 { json ← "§,"(json) }
+        json ← "§§"(json, values[id])
+    }
+    return "§]"(json)
+}
+
+fn destinationsJson(list<i32> values) → string {
+    var string json ← "["
+    for range 0‥values.length() const index {
+        if index > 0 { json ← "§,"(json) }
+        json ← "§§"(json, values[index])
+    }
+    return "§]"(json)
+}
+
+@ public
+fn snapshot(string fixture, i32 selected) → string {
+    if not known(fixture) {
+        return "{\"ok\":false,\"error\":{\"code\":\"UNKNOWN_FIXTURE\",\"message\":\"Unknown fixture\"}}"
+    }
+    if selected < -1 or selected > 511 {
+        return "{\"ok\":false,\"error\":{\"code\":\"INVALID_SELECTION\",\"message\":\"Invalid selection\"}}"
+    }
+    const ti8[8,8,8] board ← createBoard(fixture)
+    const list<i8> moved ← movedState(fixture)
+    const list<i8> cells ← flatten(board)
+    var list<i32> destinations ← empty
+    if selected ≥ 0 {
+        if cells[selected] ≠ 0 {
+            destinations ← geometry.previews(board, moved, selected)
+        }
+    }
+    const list<string> names ← fixtures()
+    var string catalog ← "["
+    for range 0‥names.length() const index {
+        if index > 0 { catalog ← "§,"(catalog) }
+        catalog ← catalog + "\"" + names[index] + "\""
+    }
+    catalog ← "§]"(catalog)
+    return "{\"ok\":true,\"snapshot\":{\"schemaVersion\":1,\"fixtureId\":\"" + fixture + "\",\"fixtures\":" + catalog + ",\"selected\":" + "§"(selected) + ",\"cells\":" + cellsJson(cells) + ",\"moved\":" + cellsJson(moved) + ",\"destinations\":" + destinationsJson(destinations) + "}}"
+}
