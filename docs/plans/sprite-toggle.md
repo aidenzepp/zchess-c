@@ -1,6 +1,6 @@
 # Existing PNG sprites with a text toggle
 
-Status: READY for one bounded presentation unit; implementation and browser proof pending.
+Status: Implemented and verified; ready for operator comparison. Browser proof and tooling limits are recorded in `docs/evidence/sprite-toggle.md`.
 Planner assignment: `bc60eaf9`; base `65edc2c`, branch `codex/faber-rebuild`.
 Repository: `/Users/sterling/Documents/dev/workspaces/personal/zchess`.
 
