@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZChess · Geometry lab</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js","three/addons/":"/vendor/three/examples/jsm/"}}</script>
+  <script type="module" src="/main.mjs"></script>
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">ZCHESS / 8 × 8 × 8</p><h1>Geometry lab</h1><p>Inspect a fixture. Select a cell to see its movement preview in space or on a slice.</p></header>
+    <aside class="disclaimer"><strong>Geometry preview only.</strong> Initial setup and bishop geometry are provisional. Bishops use plane diagonals, excluding body diagonals. Pawns advance along rank or tier separately; combined rank+tier movement is excluded. No moves, king safety, castling, en passant or promotion.</aside>
+    <section class="toolbar" aria-label="Arena controls">
+      <label>Fixture<select id="fixture" disabled><option>Loading fixtures…</option></select></label>
+      <label>View<select id="view"><option value="space">3D space</option><option value="slices">2D slice</option></select></label>
+      <div id="slice-controls" hidden>
+        <label>Plane<select id="plane"><option value="file-rank">File / rank · fixed tier</option><option value="file-tier">File / tier · fixed rank</option><option value="rank-tier">Rank / tier · fixed file</option></select></label>
+        <label><span id="slice-label">Tier</span><select id="slice"></select></label>
+      </div>
+      <button id="reset" type="button">Reset camera</button>
+      <button id="clear" type="button">Clear selection</button>
+    </section>
+    <p id="request-status" role="status" aria-live="polite">Loading snapshot…</p>
+    <section id="arena" aria-label="Arena viewer" aria-busy="true"><div id="space"></div><div id="slices" hidden></div></section>
+    <section class="readout" aria-label="Snapshot details">
+      <p>Selected <strong id="selected">None</strong></p><p>Destinations <strong id="count">—</strong></p>
+      <p class="legend">K king · Q queen · R rook · B bishop · N knight · P pawn. White/black labels show piece color. Coordinates: file A–H, rank 1–8, tier S–Z.</p>
+      <p id="targets">No current snapshot.</p>
+    </section>
+    <details><summary>Controls and preview notes</summary><p>3D: drag to orbit, right-drag or Shift-drag to pan, wheel to zoom. Focus the canvas: arrows orbit, WASD pan, +/− zoom, R reset. 2D: click a square. Changing the view or slice preserves the selected cell and preview. Selecting a cell requests a fresh Faber snapshot; it never moves a piece.</p><p>The initial fixture reproduces the provisional 48-piece setup. Orange/gold marks the selection; green marks supplied destinations. A selection outside a slice is reported beneath it.</p></details>
+  </main>
+</body>
+</html>
